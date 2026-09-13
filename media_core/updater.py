@@ -34,6 +34,9 @@ _job_lock = threading.Lock()
 _job: dict = {
     "status": "idle",  # idle | downloading | applying | done | error
     "pct": 0.0,
+    "bytes_done": 0,
+    "bytes_total": 0,
+    "speed_bps": 0.0,
     "message": "",
     "error": "",
     "restart": False,
@@ -161,8 +164,18 @@ def check_github_update() -> dict:
     }
 
 
+def _fmt_bytes(n: float) -> str:
+    n = float(n or 0)
+    if n < 1024:
+        return f"{n:.0f} Б"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} КБ"
+    return f"{n / (1024 * 1024):.1f} МБ"
+
+
 def _download_file(url: str, dest: Path) -> None:
-    # Accept: */* — иначе GitHub иногда отдаёт HTML вместо бинарника
+    import time
+
     headers = {
         **_github_headers(),
         "Accept": "application/octet-stream",
@@ -171,16 +184,44 @@ def _download_file(url: str, dest: Path) -> None:
     with urllib.request.urlopen(req, timeout=300) as r, open(dest, "wb") as out:
         total = int(r.headers.get("Content-Length") or 0)
         done = 0
+        t0 = time.monotonic()
+        last_t = t0
+        last_done = 0
+        speed = 0.0
         while True:
             chunk = r.read(1024 * 256)
             if not chunk:
                 break
             out.write(chunk)
             done += len(chunk)
+            now = time.monotonic()
+            if now - last_t >= 0.35:
+                dt = max(0.001, now - last_t)
+                speed = (done - last_done) / dt
+                last_t = now
+                last_done = done
+            elapsed = max(0.001, now - t0)
+            if speed <= 0:
+                speed = done / elapsed
+            pct = round(100.0 * done / total, 1) if total else 0.0
+            if total:
+                msg = (
+                    f"Скачивание… {pct}% · {_fmt_bytes(done)} / {_fmt_bytes(total)} · "
+                    f"{_fmt_bytes(speed)}/с"
+                )
+            else:
+                msg = f"Скачивание… {_fmt_bytes(done)} · {_fmt_bytes(speed)}/с"
             with _job_lock:
-                if total:
-                    _job["pct"] = round(100.0 * done / total, 1)
-                    _job["message"] = f"Скачивание… {_job['pct']}%"
+                _job["pct"] = pct
+                _job["bytes_done"] = done
+                _job["bytes_total"] = total
+                _job["speed_bps"] = round(speed, 1)
+                _job["message"] = msg
+        with _job_lock:
+            _job["pct"] = 100.0 if total else _job.get("pct", 0)
+            _job["bytes_done"] = done
+            _job["bytes_total"] = total or done
+            _job["message"] = f"Скачано {_fmt_bytes(done)}"
 
 
 def _write_apply_script(zip_path: Path, target: Path, exe_name: str = "MediaApp.exe") -> Path:
@@ -257,7 +298,16 @@ def _run_update_job(url: str) -> None:
     zip_path = tmp / "MediaApp.zip"
     try:
         with _job_lock:
-            _job.update(status="downloading", pct=0.0, message="Скачивание…", error="", restart=False)
+            _job.update(
+                status="downloading",
+                pct=0.0,
+                bytes_done=0,
+                bytes_total=0,
+                speed_bps=0.0,
+                message="Скачивание… подключение",
+                error="",
+                restart=False,
+            )
         log(f"Downloading update from {url}")
         _download_file(url, zip_path)
         if not zipfile.is_zipfile(zip_path):

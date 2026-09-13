@@ -12,7 +12,7 @@ from pathlib import Path
 from tkinter import filedialog
 
 APP_NAME = "Media App"
-APP_VERSION = "1.4.4"
+APP_VERSION = "1.4.5"
 DEFAULT_TARGET = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "MediaApp"
 START_MENU = (
     Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
@@ -44,6 +44,49 @@ def _icon_path() -> Path | None:
     return None
 
 
+def _ps_hidden(command: str, timeout: int = 30) -> None:
+    flags = 0
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        flags |= subprocess.CREATE_NO_WINDOW
+    subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-WindowStyle",
+            "Hidden",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        creationflags=flags,
+    )
+
+
+def _unblock_tree(root: Path) -> None:
+    """Снять Zone.Identifier без PowerShell (без вспышек консоли)."""
+    try:
+        import ctypes
+
+        delete = ctypes.windll.kernel32.DeleteFileW
+    except Exception:
+        return
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in {".dll", ".exe", ".pyd", ".zip"}:
+            continue
+        ads = str(p) + ":Zone.Identifier"
+        try:
+            delete(ads)
+        except Exception:
+            pass
+
+
 def _create_shortcut(lnk: Path, target: Path, workdir: Path, args: str = "") -> None:
     lnk.parent.mkdir(parents=True, exist_ok=True)
     t = str(target).replace("'", "''")
@@ -66,13 +109,7 @@ def _create_shortcut(lnk: Path, target: Path, workdir: Path, args: str = "") -> 
     if args:
         ps += f"$s.Arguments = '{args}'; "
     ps += "$s.Save()"
-    subprocess.run(
-        ["powershell", "-NoProfile", "-Command", ps],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    _ps_hidden(ps, timeout=30)
 
 
 def _write_uninstall(target: Path) -> Path:
@@ -203,21 +240,7 @@ def _do_install(target: Path, desktop: bool, status) -> tuple[bool, str]:
             pass
 
     status("Ярлыки…")
-    try:
-        subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                f"Get-ChildItem -LiteralPath '{target}' -Recurse -Include *.dll,*.exe,*.pyd "
-                f"| Unblock-File -ErrorAction SilentlyContinue",
-            ],
-            capture_output=True,
-            timeout=120,
-            check=False,
-        )
-    except Exception:
-        pass
+    _unblock_tree(target)
 
     START_MENU.mkdir(parents=True, exist_ok=True)
     _create_shortcut(START_MENU / f"{APP_NAME}.lnk", exe, target)

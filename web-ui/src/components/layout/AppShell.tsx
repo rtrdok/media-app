@@ -342,7 +342,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div
           className={cn(
             "relative min-h-0 flex-1 overflow-y-auto",
-            playerVisible && (videoPlaying ? VIDEO_PLAYER_DOCK_PAD : "pb-24"),
+            playerVisible && (videoPlaying ? VIDEO_PLAYER_DOCK_PAD : "pb-28"),
           )}
         >
           {children}

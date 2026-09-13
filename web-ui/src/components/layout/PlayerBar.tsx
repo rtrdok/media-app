@@ -19,7 +19,12 @@ import { AddToPlaylistsModal } from "@/components/library/AddToPlaylistsModal"
 import { LyricsPanel } from "@/components/player/LyricsModal"
 import { PlayerQueuePanel } from "@/components/player/PlayerQueuePanel"
 import { useApp } from "@/context/AppProvider"
-import { applyMiniPlayerWindow, setWindowFullscreen } from "@/lib/api"
+import {
+  applyMiniPlayerWindow,
+  fetchPlayerCommands,
+  publishPlayerState,
+  setWindowFullscreen,
+} from "@/lib/api"
 import { filePathFromPlayerSrc, isVideoSrc } from "@/lib/media"
 import { cn } from "@/lib/utils"
 
@@ -58,8 +63,11 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   const [addPlOpen, setAddPlOpen] = useState(false)
   const [queueOpen, setQueueOpen] = useState(false)
   const [lyricsOpen, setLyricsOpen] = useState(false)
-  const [narrow, setNarrow] = useState(false)
   const hideTimer = useRef(0)
+  const volumeRef = useRef(volume)
+  volumeRef.current = volume
+  const playingRef = useRef(playing)
+  playingRef.current = playing
 
   const hidden = page === "settings" && !showOnSettings
   const hasSrc = Boolean(player?.src)
@@ -120,13 +128,6 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   }, [hasSrc])
 
   useEffect(() => {
-    const check = () => setNarrow(window.innerWidth < 1180)
-    check()
-    window.addEventListener("resize", check)
-    return () => window.removeEventListener("resize", check)
-  }, [])
-
-  useEffect(() => {
     if (!theater) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") void applyFullscreen(false)
@@ -141,7 +142,6 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
       const t = e.target as HTMLElement | null
       const tag = t?.tagName
       if (tag === "INPUT" || tag === "TEXTAREA" || t?.isContentEditable) return
-      if (miniPlayer) return
       if (e.code === "Space") {
         e.preventDefault()
         setPlaying((p) => !p)
@@ -165,7 +165,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [playNextInQueue, playPrevInQueue, setPlaying, miniPlayer])
+  }, [playNextInQueue, playPrevInQueue, setPlaying])
 
   useEffect(() => {
     if (!isVideo) {
@@ -190,6 +190,50 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
       el.removeEventListener("mousedown", bump)
     }
   }, [isVideo, playing, player?.src, theater])
+
+  // Мост с отдельным мини-окном (главное скрыто, аудио здесь)
+  useEffect(() => {
+    if (!hasSrc || !miniPlayer) return
+    const publish = () => {
+      const el = mediaRef.current
+      void publishPlayerState({
+        title: player?.title || "",
+        artist: player?.artist || "",
+        playing: playingRef.current,
+        current: el?.currentTime ?? 0,
+        duration: el?.duration && Number.isFinite(el.duration) ? el.duration : 0,
+        volume: volumeRef.current,
+        has_track: true,
+      })
+    }
+    publish()
+    const id = window.setInterval(publish, 500)
+    return () => window.clearInterval(id)
+  }, [hasSrc, miniPlayer, player?.title, player?.artist, playing, volume])
+
+  useEffect(() => {
+    if (!hasSrc || !miniPlayer) return
+    const id = window.setInterval(() => {
+      void fetchPlayerCommands()
+        .then((j) => {
+          for (const c of j.commands || []) {
+            if (c.action === "toggle") setPlaying((p) => !p)
+            else if (c.action === "play") setPlaying(true)
+            else if (c.action === "pause") setPlaying(false)
+            else if (c.action === "next") playNextInQueue()
+            else if (c.action === "prev") playPrevInQueue()
+            else if (c.action === "volume" && typeof c.value === "number") {
+              setVolume(Math.min(1, Math.max(0, c.value)))
+            } else if (c.action === "close_mini") {
+              setMiniPlayer(false)
+              void applyMiniPlayerWindow(false)
+            }
+          }
+        })
+        .catch(() => {})
+    }, 350)
+    return () => window.clearInterval(id)
+  }, [hasSrc, miniPlayer, playNextInQueue, playPrevInQueue, setPlaying, setMiniPlayer])
 
   useEffect(() => {
     if (!hasSrc && miniPlayer) {
@@ -263,7 +307,6 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   const trackPath = player?.path || (player?.src ? filePathFromPlayerSrc(player.src) : "")
   const RepeatIcon = repeat === "one" ? Repeat1 : Repeat
 
-  // Один audio на все режимы — иначе при мини remount останавливает трек
   const audioEl =
     !isVideo && player?.src ? (
       <audio
@@ -275,215 +318,139 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
       />
     ) : null
 
-  const miniChrome =
-    miniPlayer && !isVideo ? (
-      <div className="bg-card border-border fixed inset-0 z-[100] flex h-full items-center gap-3 border-0 px-3">
-        <button
-          type="button"
-          aria-label="Предыдущий"
-          disabled={!canPrev}
-          onClick={() => playPrevInQueue()}
-          className={cn(
-            "flex size-8 items-center justify-center rounded-lg",
-            canPrev ? "text-foreground/80 hover:text-foreground" : "text-muted-foreground/40",
-          )}
-        >
-          <SkipBack className="size-4" />
-        </button>
-        <button
-          type="button"
-          aria-label={playing ? "Пауза" : "Воспроизведение"}
-          onClick={() => setPlaying(!playing)}
-          className="bg-primary text-primary-foreground flex size-9 shrink-0 items-center justify-center rounded-full"
-        >
-          {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
-        </button>
-        <button
-          type="button"
-          aria-label="Следующий"
-          disabled={!canNext}
-          onClick={() => playNextInQueue()}
-          className={cn(
-            "flex size-8 items-center justify-center rounded-lg",
-            canNext ? "text-foreground/80 hover:text-foreground" : "text-muted-foreground/40",
-          )}
-        >
-          <SkipForward className="size-4" />
-        </button>
-        <div className="min-w-0 flex-1 px-1">
-          <p className="truncate text-sm font-semibold">{player?.title ?? "—"}</p>
-          <p className="text-muted-foreground truncate text-xs">{player?.artist ?? ""}</p>
-        </div>
-        <Volume2 className="text-muted-foreground size-3.5 shrink-0" aria-hidden />
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.05}
-          value={volume}
-          onChange={(e) => setVolume(Number(e.target.value))}
-          className="accent-primary h-1.5 w-24 shrink-0 cursor-pointer"
-          aria-label="Громкость"
-        />
-        <button
-          type="button"
-          title="Вернуть в приложение"
-          onClick={() => void toggleMiniPlayer()}
-          className="text-primary flex size-8 items-center justify-center rounded-lg"
-        >
-          <PictureInPicture2 className="size-4" />
-        </button>
-        <button
-          type="button"
-          aria-label="Закрыть"
-          onClick={onClose}
-          className="text-muted-foreground hover:text-foreground flex size-8 items-center justify-center rounded-lg"
-        >
-          <X className="size-4" />
-        </button>
-      </div>
-    ) : null
-
+  // Spotify-like: left meta | center transport+seek | right utils
   const controls = (
     <div
       className={cn(
-        "bg-card/95 border-border flex h-[72px] shrink-0 items-center gap-2 border-t px-3 backdrop-blur-sm transition-opacity duration-300 sm:gap-3 sm:px-5",
+        "bg-card/95 border-border grid h-[84px] shrink-0 grid-cols-[minmax(160px,1fr)_minmax(240px,1.4fr)_minmax(160px,1fr)] items-center gap-2 border-t px-4 backdrop-blur-sm transition-opacity duration-300",
         !isVideo && "fixed z-40 right-0 bottom-0 left-[232px]",
         isVideo && !uiVisible && "pointer-events-none opacity-0",
-        miniPlayer && "hidden",
+        miniPlayer && "pointer-events-none opacity-0",
       )}
     >
-      <div className="flex shrink-0 items-center gap-0.5">
+      {/* Left */}
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">{player?.title ?? "—"}</p>
+          <p className="text-muted-foreground truncate text-xs">
+            {player?.artist ?? ""}
+            {isVideo ? " · Видео" : ""}
+          </p>
+        </div>
         <button
           type="button"
-          aria-label="Предыдущий трек"
-          disabled={!canPrev}
-          onClick={() => playPrevInQueue()}
-          className={cn(
-            "flex size-8 items-center justify-center rounded-lg sm:size-9",
-            canPrev ? "text-muted-foreground hover:text-foreground" : "text-muted-foreground/40",
-          )}
+          aria-label="Закрыть трек"
+          onClick={onClose}
+          className="text-muted-foreground hover:text-foreground flex size-8 shrink-0 items-center justify-center rounded-lg"
         >
-          <SkipBack className="size-4" />
+          <X className="size-3.5" />
         </button>
         <button
           type="button"
-          aria-label={playing ? "Пауза" : "Воспроизведение"}
-          onClick={() => setPlaying(!playing)}
-          className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-full sm:size-10"
+          title="В плейлист"
+          disabled={!trackPath}
+          onClick={() => setAddPlOpen(true)}
+          className="text-muted-foreground hover:text-foreground flex size-8 shrink-0 items-center justify-center rounded-lg disabled:opacity-40"
         >
-          {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
-        </button>
-        <button
-          type="button"
-          aria-label="Следующий трек"
-          disabled={!canNext}
-          onClick={() => playNextInQueue()}
-          className={cn(
-            "flex size-8 items-center justify-center rounded-lg sm:size-9",
-            canNext ? "text-muted-foreground hover:text-foreground" : "text-muted-foreground/40",
-          )}
-        >
-          <SkipForward className="size-4" />
+          <span className="text-sm font-bold">+</span>
         </button>
       </div>
-      <div className={cn("min-w-0 shrink", narrow ? "w-24" : "w-36 sm:w-44")}>
-        <p className="truncate text-sm font-medium">{player?.title ?? "—"}</p>
-        <p className="text-muted-foreground truncate text-xs">
-          {player?.artist ?? ""}
-          {isVideo ? " · Видео" : ""}
-        </p>
-      </div>
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <span className="text-muted-foreground w-8 shrink-0 text-xs tabular-nums">{current}</span>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.001}
-          value={Number.isFinite(progress) ? progress : 0}
-          aria-label="Позиция воспроизведения"
-          className="accent-primary h-1.5 min-w-0 flex-1 cursor-pointer"
-          onChange={(e) => {
-            setSeeking(true)
-            seekTo(Number(e.target.value))
-          }}
-          onMouseUp={() => setSeeking(false)}
-          onTouchEnd={() => setSeeking(false)}
-        />
-        <span className="text-muted-foreground w-8 shrink-0 text-right text-xs tabular-nums">{total}</span>
-      </div>
-      <div className="relative flex shrink-0 items-center gap-0.5">
-        <Volume2 className="text-muted-foreground hidden size-4 shrink-0 sm:block" aria-hidden />
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.05}
-          value={volume}
-          onChange={(e) => setVolume(Number(e.target.value))}
-          className={cn("accent-primary h-1.5 cursor-pointer", narrow ? "w-12" : "w-16 sm:w-20")}
-          aria-label="Уровень громкости"
-        />
-        {isVideo ? (
+
+      {/* Center */}
+      <div className="flex min-w-0 flex-col items-center justify-center gap-1.5">
+        <div className="flex items-center gap-1">
           <button
             type="button"
-            aria-label={theater ? "Выйти из полного экрана" : "На весь экран"}
-            onClick={() => void applyFullscreen(!theater)}
-            className="text-muted-foreground hover:text-foreground flex size-8 items-center justify-center rounded-lg sm:size-9"
+            title={shuffle ? "Перемешивание вкл." : "Вперемешку"}
+            onClick={() => setShuffle((v) => !v)}
+            className={cn(
+              "flex size-8 items-center justify-center rounded-lg",
+              shuffle ? "text-primary" : "text-muted-foreground hover:text-foreground",
+            )}
           >
-            {theater ? <Minimize className="size-4" /> : <Maximize className="size-4" />}
+            <Shuffle className="size-3.5" />
           </button>
-        ) : null}
-        {!narrow ? (
-          <>
-            <button
-              type="button"
-              title={
-                repeat === "off"
-                  ? "Повтор выкл."
-                  : repeat === "all"
-                    ? "Повтор очереди"
-                    : "Повтор трека"
-              }
-              onClick={() => cycleRepeat()}
-              className={cn(
-                "flex size-8 items-center justify-center rounded-lg sm:size-9",
-                repeat !== "off" ? "text-primary" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <RepeatIcon className="size-4" />
-            </button>
-            <button
-              type="button"
-              title={shuffle ? "Перемешивание вкл." : "Вперемешку"}
-              onClick={() => setShuffle((v) => !v)}
-              className={cn(
-                "flex size-8 items-center justify-center rounded-lg sm:size-9",
-                shuffle ? "text-primary" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Shuffle className="size-4" />
-            </button>
-            <button
-              type="button"
-              title="Очередь (Q)"
-              onClick={() => setQueueOpen((v) => !v)}
-              className={cn(
-                "flex size-8 items-center justify-center rounded-lg sm:size-9",
-                queueOpen ? "text-primary" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <ListMusic className="size-4" />
-            </button>
-          </>
-        ) : null}
+          <button
+            type="button"
+            aria-label="Предыдущий"
+            disabled={!canPrev}
+            onClick={() => playPrevInQueue()}
+            className={cn(
+              "flex size-8 items-center justify-center rounded-lg",
+              canPrev ? "text-muted-foreground hover:text-foreground" : "text-muted-foreground/40",
+            )}
+          >
+            <SkipBack className="size-4" />
+          </button>
+          <button
+            type="button"
+            aria-label={playing ? "Пауза" : "Воспроизведение"}
+            onClick={() => setPlaying(!playing)}
+            className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-full"
+          >
+            {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
+          </button>
+          <button
+            type="button"
+            aria-label="Следующий"
+            disabled={!canNext}
+            onClick={() => playNextInQueue()}
+            className={cn(
+              "flex size-8 items-center justify-center rounded-lg",
+              canNext ? "text-muted-foreground hover:text-foreground" : "text-muted-foreground/40",
+            )}
+          >
+            <SkipForward className="size-4" />
+          </button>
+          <button
+            type="button"
+            title={
+              repeat === "off"
+                ? "Повтор выкл."
+                : repeat === "all"
+                  ? "Повтор очереди"
+                  : "Повтор трека"
+            }
+            onClick={() => cycleRepeat()}
+            className={cn(
+              "flex size-8 items-center justify-center rounded-lg",
+              repeat !== "off" ? "text-primary" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <RepeatIcon className="size-3.5" />
+          </button>
+        </div>
+        <div className="flex w-full max-w-md items-center gap-2 px-1">
+          <span className="text-muted-foreground w-8 shrink-0 text-right text-[11px] tabular-nums">
+            {current}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.001}
+            value={Number.isFinite(progress) ? progress : 0}
+            aria-label="Позиция"
+            className="accent-primary h-1 min-w-0 flex-1 cursor-pointer"
+            onChange={(e) => {
+              setSeeking(true)
+              seekTo(Number(e.target.value))
+            }}
+            onMouseUp={() => setSeeking(false)}
+            onTouchEnd={() => setSeeking(false)}
+          />
+          <span className="text-muted-foreground w-8 shrink-0 text-[11px] tabular-nums">{total}</span>
+        </div>
+      </div>
+
+      {/* Right */}
+      <div className="relative flex items-center justify-end gap-0.5">
         <button
           type="button"
           title="Текст песни (L)"
           onClick={() => setLyricsOpen((v) => !v)}
           className={cn(
-            "flex size-8 items-center justify-center rounded-lg sm:size-9",
+            "flex size-8 items-center justify-center rounded-lg",
             lyricsOpen ? "text-primary" : "text-muted-foreground hover:text-foreground",
           )}
         >
@@ -491,30 +458,46 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         </button>
         <button
           type="button"
-          title="Мини-плеер"
-          onClick={() => void toggleMiniPlayer()}
-          className="text-muted-foreground hover:text-foreground flex size-8 items-center justify-center rounded-lg sm:size-9"
+          title="Очередь (Q)"
+          onClick={() => setQueueOpen((v) => !v)}
+          className={cn(
+            "flex size-8 items-center justify-center rounded-lg",
+            queueOpen ? "text-primary" : "text-muted-foreground hover:text-foreground",
+          )}
         >
-          <PictureInPicture2 className="size-4" />
+          <ListMusic className="size-4" />
         </button>
-        {!narrow ? (
+        {isVideo ? (
           <button
             type="button"
-            title="В плейлист"
-            disabled={!trackPath}
-            onClick={() => setAddPlOpen(true)}
-            className="text-muted-foreground hover:text-foreground flex size-8 items-center justify-center rounded-lg disabled:opacity-40 sm:size-9"
+            aria-label={theater ? "Выйти из полного экрана" : "На весь экран"}
+            onClick={() => void applyFullscreen(!theater)}
+            className="text-muted-foreground hover:text-foreground flex size-8 items-center justify-center rounded-lg"
           >
-            <span className="text-xs font-bold">+</span>
+            {theater ? <Minimize className="size-4" /> : <Maximize className="size-4" />}
           </button>
         ) : null}
+        <Volume2 className="text-muted-foreground ml-1 size-4 shrink-0" aria-hidden />
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={volume}
+          onChange={(e) => setVolume(Number(e.target.value))}
+          className="accent-primary h-1 w-20 cursor-pointer"
+          aria-label="Громкость"
+        />
         <button
           type="button"
-          aria-label="Закрыть плеер"
-          onClick={onClose}
-          className="text-muted-foreground hover:text-foreground flex size-8 items-center justify-center rounded-lg sm:size-9"
+          title="Мини-плеер"
+          onClick={() => void toggleMiniPlayer()}
+          className={cn(
+            "flex size-8 items-center justify-center rounded-lg",
+            miniPlayer ? "text-primary" : "text-muted-foreground hover:text-foreground",
+          )}
         >
-          <X className="size-4" />
+          <PictureInPicture2 className="size-4" />
         </button>
         <PlayerQueuePanel open={queueOpen} onClose={() => setQueueOpen(false)} />
       </div>
@@ -546,7 +529,6 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     return (
       <>
         {audioEl}
-        {miniChrome}
         {controls}
         {extras}
       </>

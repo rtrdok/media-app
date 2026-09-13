@@ -53,6 +53,7 @@ _window = None
 _tray = None
 _exit_requested = False
 _mutex_handle = None
+_mini_apply: dict = {"fn": None}
 
 
 def _port_free(port: int) -> bool:
@@ -155,6 +156,26 @@ def _show_window() -> None:
     if _window is None:
         return
     try:
+        fn = _mini_apply.get("fn")
+        if callable(fn):
+            try:
+                from media_core.player_bridge import is_mini_open
+
+                if is_mini_open():
+                    fn(False)
+            except Exception:
+                pass
+        try:
+            h = int(getattr(_window, "height", 0) or 0)
+            w = int(getattr(_window, "width", 0) or 0)
+            if h < 400 or w < 900:
+                _window.resize(1180, 780)
+        except Exception:
+            pass
+        try:
+            _window.on_top = False
+        except Exception:
+            pass
         _window.show()
         _window.restore()
     except Exception:
@@ -259,51 +280,69 @@ def main() -> None:
 
         set_on_top_callback(_set_on_top)
 
-        _geom_saved: dict = {}
+        _mini_win: dict = {"win": None}
 
         def _apply_mini_player(enable: bool) -> bool:
-            """Сжимает главное окно в мини-режим (без второго WebView — он зависал)."""
+            """Отдельное frameless-окно + скрытие главного (без сжатия UI)."""
             from media_core.player_bridge import set_mini_open
 
-            win = _window
-            if win is None:
+            main = _window
+            mini = _mini_win.get("win")
+            if main is None or mini is None:
                 set_mini_open(False)
                 return False
             try:
                 if enable:
+                    set_mini_open(True)
                     try:
-                        _geom_saved["box"] = (win.width, win.height, win.x, win.y)
-                    except Exception:
-                        _geom_saved["box"] = (1180, 780, None, None)
-                    # длиннее и чуть ниже — название трека + громкость
-                    win.resize(620, 78)
-                    try:
-                        # правый нижний угол экрана
                         import ctypes
 
                         user32 = ctypes.windll.user32
                         sw = int(user32.GetSystemMetrics(0))
                         sh = int(user32.GetSystemMetrics(1))
-                        win.move(max(0, sw - 640), max(0, sh - 140))
+                        mini.move(max(0, sw - 660), max(0, sh - 120))
                     except Exception:
                         pass
-                    win.on_top = True
-                    set_mini_open(True)
+                    mini.resize(640, 72)
+                    mini.on_top = True
+                    mini.show()
+                    # главное скрываем — аудио продолжает играть в скрытом WebView
+                    try:
+                        main.hide()
+                    except Exception:
+                        pass
                 else:
-                    box = _geom_saved.get("box") or (1180, 780, None, None)
-                    w, h, x, y = box
-                    win.on_top = False
-                    win.resize(max(800, int(w or 1180)), max(560, int(h or 780)))
-                    if x is not None and y is not None:
-                        try:
-                            win.move(int(x), int(y))
-                        except Exception:
-                            pass
+                    try:
+                        mini.hide()
+                    except Exception:
+                        pass
                     set_mini_open(False)
+                    try:
+                        main.on_top = False
+                    except Exception:
+                        pass
+                    try:
+                        # на всякий случай вернуть нормальный размер
+                        h = int(getattr(main, "height", 0) or 0)
+                        w = int(getattr(main, "width", 0) or 0)
+                        if h < 400 or w < 900:
+                            main.resize(1180, 780)
+                    except Exception:
+                        pass
+                    main.show()
+                    try:
+                        main.restore()
+                    except Exception:
+                        pass
                 return True
             except Exception:
-                log.exception("mini player resize failed")
+                log.exception("mini player failed")
                 set_mini_open(False)
+                try:
+                    main.show()
+                    main.restore()
+                except Exception:
+                    pass
                 return False
 
         class GuiApi:
@@ -319,6 +358,7 @@ def main() -> None:
             set_mini_want(bool(enable))
 
         set_mini_player_callback(_set_mini_player)
+        _mini_apply["fn"] = _apply_mini_player
 
         log.info("Media App (web UI) -> http://%s:%s  downloads=%s", HOST, PORT, get_download_dir())
         threading.Thread(target=_serve, args=(PORT,), daemon=True).start()
@@ -333,13 +373,52 @@ def main() -> None:
             f"http://{HOST}:{PORT}/",
             width=1180,
             height=780,
-            min_size=(520, 72),
+            min_size=(1040, 680),
             background_color="#0B1020",
             frameless=False,
             easy_drag=False,
             js_api=gui_api,
         )
         _window = window
+
+        mini = webview.create_window(
+            "Media App",
+            f"http://{HOST}:{PORT}/mini",
+            width=640,
+            height=72,
+            on_top=True,
+            frameless=True,
+            easy_drag=True,
+            background_color="#0f172a",
+            resizable=False,
+            hidden=True,
+            js_api=gui_api,
+        )
+        _mini_win["win"] = mini
+
+        def on_mini_closing():
+            from media_core.player_bridge import push_command, set_mini_open
+
+            set_mini_open(False)
+            try:
+                push_command("close_mini")
+            except Exception:
+                pass
+            try:
+                mini.hide()
+            except Exception:
+                pass
+            try:
+                window.show()
+                window.restore()
+            except Exception:
+                pass
+            return False
+
+        try:
+            mini.events.closing += on_mini_closing
+        except Exception:
+            pass
 
         def on_closing():
             if _exit_requested:
@@ -358,6 +437,16 @@ def main() -> None:
             pass
 
         def on_closed():
+            try:
+                mw = _mini_win.get("win")
+                _mini_win["win"] = None
+                if mw is not None:
+                    try:
+                        mw.destroy()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             try:
                 from web.server import request_app_shutdown
 

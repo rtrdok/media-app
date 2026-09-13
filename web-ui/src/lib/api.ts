@@ -323,6 +323,9 @@ export function updateStatus() {
     ok: boolean
     status?: string
     pct?: number
+    bytes_done?: number
+    bytes_total?: number
+    speed_bps?: number
     message?: string
     error?: string
     restart?: boolean

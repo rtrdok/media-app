@@ -32,6 +32,7 @@ export function SettingsPage() {
   const [updMsg, setUpdMsg] = useState("Установлена последняя версия")
   const [updChangelog, setUpdChangelog] = useState("")
   const [updBusy, setUpdBusy] = useState(false)
+  const [updPct, setUpdPct] = useState(0)
   const [hasUpdate, setHasUpdate] = useState(false)
   const [updUrl, setUpdUrl] = useState("")
   const [updOk, setUpdOk] = useState(true)
@@ -104,6 +105,7 @@ export function SettingsPage() {
   async function onApplyUpdate() {
     setUpdBusy(true)
     setUpdOk(true)
+    setUpdPct(0)
     setUpdMsg("Скачивание обновления…")
     try {
       const j = await applyUpdate(updUrl || undefined)
@@ -118,6 +120,7 @@ export function SettingsPage() {
       pollRef.current = window.setInterval(() => {
         void updateStatus()
           .then((s) => {
+            if (typeof s.pct === "number") setUpdPct(s.pct)
             if (s.message) setUpdMsg(s.message)
             if (s.status === "error") {
               setUpdOk(false)
@@ -126,6 +129,7 @@ export function SettingsPage() {
             }
             if (s.status === "done" || s.restart) {
               setUpdOk(true)
+              setUpdPct(100)
               setUpdMsg(s.message || "Перезапуск…")
               window.clearInterval(pollRef.current)
             }
@@ -133,7 +137,7 @@ export function SettingsPage() {
           .catch(() => {
             /* ignore transient */
           })
-      }, 800)
+      }, 400)
     } catch (e) {
       setUpdOk(false)
       setUpdMsg(e instanceof Error ? e.message : String(e))
@@ -336,6 +340,19 @@ export function SettingsPage() {
                 )}
                 <div className="min-w-0">
                   <p>{updMsg}</p>
+                  {updBusy ? (
+                    <div className="mt-3 max-w-md">
+                      <div className="bg-muted h-2 overflow-hidden rounded-full">
+                        <div
+                          className="bg-primary h-full rounded-full transition-all duration-300"
+                          style={{ width: `${Math.min(100, Math.max(0, updPct))}%` }}
+                        />
+                      </div>
+                      <p className="text-muted-foreground mt-1 text-xs tabular-nums">
+                        {updPct > 0 ? `${updPct}%` : "Подключение…"}
+                      </p>
+                    </div>
+                  ) : null}
                   {updChangelog ? (
                     <p className="text-muted-foreground mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap text-xs">
                       {updChangelog}
