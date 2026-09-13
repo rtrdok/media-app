@@ -36,6 +36,7 @@ hiddenimports = (
         "media_core.library",
         "media_core.backup",
         "media_core.updater",
+        "media_core.lyrics",
         "clr_loader",
         "pythonnet",
         "clr",

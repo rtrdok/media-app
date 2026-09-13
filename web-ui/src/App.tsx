@@ -1,3 +1,4 @@
+import { OnboardingModal } from "@/components/OnboardingModal"
 import { AppShell } from "@/components/layout/AppShell"
 import { useApp } from "@/context/AppProvider"
 import { AnimePage } from "@/pages/AnimePage"
@@ -17,5 +18,10 @@ export default function App() {
   else if (page === "anime") content = <AnimePage />
   else if (page === "settings") content = <SettingsPage />
 
-  return <AppShell>{content}</AppShell>
+  return (
+    <AppShell>
+      {content}
+      <OnboardingModal />
+    </AppShell>
+  )
 }

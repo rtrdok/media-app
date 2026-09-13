@@ -108,6 +108,27 @@ export function setWindowFullscreen(enable: boolean | null = null) {
   })
 }
 
+export function setWindowOnTop(enable: boolean) {
+  return fetch("/api/window/on_top", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enable }),
+  })
+}
+
+export function fetchLyrics(title: string, artist = "") {
+  return json<{
+    ok: boolean
+    lyrics?: string
+    synced?: boolean
+    error?: string
+  }>("/api/lyrics", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, artist }),
+  })
+}
+
 export function fileUrl(path: string) {
   return `/api/file?p=${encodeURIComponent(path)}`
 }

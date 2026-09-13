@@ -80,3 +80,49 @@ html.light {
   --sidebar-border: 214 32% 91%;
   --sidebar-ring: 217 91% 53%;
 }
+
+/* Акценты (data-accent на <html>) */
+html[data-accent="teal"],
+html[data-accent="teal"].dark {
+  --primary: 173 80% 40%;
+  --ring: 173 80% 40%;
+  --sidebar-primary: 173 80% 40%;
+  --accent: 173 60% 35%;
+}
+html[data-accent="rose"],
+html[data-accent="rose"].dark {
+  --primary: 350 80% 55%;
+  --ring: 350 80% 55%;
+  --sidebar-primary: 350 80% 55%;
+  --accent: 350 60% 45%;
+}
+html[data-accent="amber"],
+html[data-accent="amber"].dark {
+  --primary: 38 92% 50%;
+  --ring: 38 92% 50%;
+  --sidebar-primary: 38 92% 50%;
+  --accent: 32 80% 45%;
+}
+html[data-accent="violet"],
+html[data-accent="violet"].dark {
+  --primary: 262 83% 58%;
+  --ring: 262 83% 58%;
+  --sidebar-primary: 262 83% 58%;
+  --accent: 262 60% 48%;
+}
+html.light[data-accent="teal"] {
+  --primary: 173 80% 36%;
+  --ring: 173 80% 36%;
+}
+html.light[data-accent="rose"] {
+  --primary: 350 75% 48%;
+  --ring: 350 75% 48%;
+}
+html.light[data-accent="amber"] {
+  --primary: 32 95% 44%;
+  --ring: 32 95% 44%;
+}
+html.light[data-accent="violet"] {
+  --primary: 262 70% 50%;
+  --ring: 262 70% 50%;
+}

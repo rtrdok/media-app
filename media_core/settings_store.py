@@ -12,6 +12,7 @@ _PATH = BASE_DIR / "config" / "app_settings.json"
 _DEFAULTS = {
     "download_dir": DOWNLOAD_DIR,
     "theme": "dark",
+    "accent": "blue",
     "rate_limit": "",
     "subtitles": "off",
     "minimize_to_tray": True,
@@ -28,6 +29,7 @@ _DEFAULTS = {
     "max_concurrent_downloads": 3,
     "use_proxy": False,
     "proxy_list": "",
+    "onboarding_done": False,
 }
 
 

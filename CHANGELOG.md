@@ -1,7 +1,21 @@
-# Changelog
+## [1.4.0] — 2026-09-13
 
-All notable changes to Media App are documented here.  
-Кратко для пользователей: что нового в каждом релизе.
+### Added / Добавлено
+- Очередь плеера (список, переход, удаление, drag&drop) / Player queue panel
+- Повтор трека / всей очереди / Repeat one & all
+- Поиск по библиотеке / Library search
+- Плейлист «★ Любимое» / Favorites playlist
+- Тексты песен (lrclib.net) / Lyrics
+- Мини-плеер поверх окон / Mini-player always on top
+- Горячие клавиши: Space, Ctrl+←/→, ↑/↓ громкость, L, Q
+- Онбординг при первом запуске / First-run onboarding
+- Цвета акцента (синий, бирюза, розовый, янтарь, фиолет)
+- Пауза/продолжение очереди загрузок (улучшенный UX)
+- Installer в GitHub Release вместе с zip
+
+### Notes
+- Quality picker before download remains on Home preview
+- Settings & history stay in `%APPDATA%\MediaApp`
 
 ## [1.3.1] — 2026-09-13
 
@@ -12,14 +26,4 @@ All notable changes to Media App are documented here.
 ## [1.3.0] — 2026-09-13
 
 ### Added / Добавлено
-- **RU:** Удаление файла из библиотеки (меню ⋯ на карточке) — с диска и из плейлистов  
-  **EN:** Delete file from library (⋯ menu) — removes from disk and playlists
-- **RU:** Автообновление с GitHub Releases (проверка + скачать и обновить)  
-  **EN:** Auto-update from GitHub Releases (check + download & apply)
-- **RU:** Настройки/история в `%APPDATA%\MediaApp` — не сбрасываются при обновлении  
-  **EN:** Settings/history in `%APPDATA%\MediaApp` — preserved across updates
-- **RU:** Плейлисты: модалки в стиле приложения, чипы, shuffle, добавление в несколько плейлистов  
-  **EN:** Playlists: in-app modals, chips, shuffle, multi-playlist add
-
-### Notes
-- Release assets: `MediaApp.zip` (required for in-app update), optional `MediaApp-Installer.exe`
+- Library delete, GitHub auto-update, AppData settings, playlists UX

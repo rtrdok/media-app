@@ -36,7 +36,13 @@ from media_core.single_instance import (
     wake_existing_instance,
 )
 from media_core.utils import cleanup_temp_files
-from web.server import app, set_fullscreen_callback, set_listen_port, set_show_window_callback
+from web.server import (
+    app,
+    set_fullscreen_callback,
+    set_listen_port,
+    set_on_top_callback,
+    set_show_window_callback,
+)
 
 HOST = "127.0.0.1"
 PREFERRED_PORT = 17865
@@ -240,6 +246,17 @@ def main() -> None:
                 log.exception("toggle_fullscreen failed")
 
         set_fullscreen_callback(_set_fullscreen)
+
+        def _set_on_top(enable: bool):
+            win = _window
+            if win is None:
+                return
+            try:
+                win.on_top = bool(enable)
+            except Exception:
+                log.exception("on_top failed")
+
+        set_on_top_callback(_set_on_top)
 
         log.info("Media App (web UI) -> http://%s:%s  downloads=%s", HOST, PORT, get_download_dir())
         threading.Thread(target=_serve, args=(PORT,), daemon=True).start()

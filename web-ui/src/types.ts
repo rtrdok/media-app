@@ -31,9 +31,12 @@ export type QueueItem = {
   error?: string
 }
 
+export type RepeatMode = "off" | "one" | "all"
+
 export type AppSettings = {
   download_dir: string
   theme: string
+  accent?: string
   rate_limit: string
   subtitles: string
   minimize_to_tray: boolean
@@ -48,6 +51,7 @@ export type AppSettings = {
   max_concurrent_downloads?: number
   use_proxy?: boolean
   proxy_list?: string
+  onboarding_done?: boolean
 }
 
 export type AppState = {

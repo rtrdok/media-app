@@ -141,6 +141,24 @@ export function SettingsPage() {
               </Select>
             </div>
             <div className="flex items-center justify-between gap-8">
+              <Label>Цвет акцента</Label>
+              <Select
+                value={draft.accent || "blue"}
+                onValueChange={(v) => v && patch({ accent: v })}
+              >
+                <SelectTrigger className="w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="blue">Синий</SelectItem>
+                  <SelectItem value="teal">Бирюзовый</SelectItem>
+                  <SelectItem value="rose">Розовый</SelectItem>
+                  <SelectItem value="amber">Янтарный</SelectItem>
+                  <SelectItem value="violet">Фиолетовый</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center justify-between gap-8">
               <Label htmlFor="autostart">Запускать Media App вместе с Windows</Label>
               <Switch
                 id="autostart"

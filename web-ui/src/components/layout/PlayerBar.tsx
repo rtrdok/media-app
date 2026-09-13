@@ -1,9 +1,13 @@
 import {
   ListMusic,
   Maximize,
+  Mic2,
   Minimize,
   Pause,
+  PictureInPicture2,
   Play,
+  Repeat,
+  Repeat1,
   Shuffle,
   SkipBack,
   SkipForward,
@@ -12,8 +16,10 @@ import {
 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { AddToPlaylistsModal } from "@/components/library/AddToPlaylistsModal"
+import { LyricsModal } from "@/components/player/LyricsModal"
+import { PlayerQueuePanel } from "@/components/player/PlayerQueuePanel"
 import { useApp } from "@/context/AppProvider"
-import { setWindowFullscreen } from "@/lib/api"
+import { setWindowFullscreen, setWindowOnTop } from "@/lib/api"
 import { filePathFromPlayerSrc, isVideoSrc } from "@/lib/media"
 import { cn } from "@/lib/utils"
 
@@ -32,6 +38,10 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     queueMeta,
     shuffle,
     setShuffle,
+    repeat,
+    cycleRepeat,
+    miniPlayer,
+    setMiniPlayer,
   } = useApp()
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null)
   const shellRef = useRef<HTMLDivElement | null>(null)
@@ -41,11 +51,14 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   const [total, setTotal] = useState(player?.durationLabel ?? "0:00")
   const [volume, setVolume] = useState(0.85)
   const [seeking, setSeeking] = useState(false)
-  /** Настоящий fullscreen монитора (только по кнопке / двойному клику). */
   const [theater, setTheater] = useState(false)
   const [uiVisible, setUiVisible] = useState(true)
   const [addPlOpen, setAddPlOpen] = useState(false)
+  const [queueOpen, setQueueOpen] = useState(false)
+  const [lyricsOpen, setLyricsOpen] = useState(false)
   const hideTimer = useRef(0)
+  const volumeRef = useRef(volume)
+  volumeRef.current = volume
 
   const hidden = page === "settings" && !showOnSettings
   const hasSrc = Boolean(player?.src)
@@ -54,7 +67,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   const canPrev = queueMeta.length > 1 && queueMeta.index > 0
   const canNext =
     queueMeta.length > 1 &&
-    (queueMeta.index < queueMeta.length - 1 || shuffle)
+    (queueMeta.index < queueMeta.length - 1 || shuffle || repeat !== "off")
 
   async function applyFullscreen(on: boolean) {
     setTheater(on)
@@ -73,7 +86,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     setCurrent("0:00")
     setProgress(0)
     void applyFullscreen(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- только смена трека
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player?.src, player?.durationLabel])
 
   useEffect(() => {
@@ -104,6 +117,10 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   }, [hasSrc])
 
   useEffect(() => {
+    void setWindowOnTop(miniPlayer)
+  }, [miniPlayer])
+
+  useEffect(() => {
     if (!theater) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") void applyFullscreen(false)
@@ -112,6 +129,36 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     return () => window.removeEventListener("keydown", onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [theater])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      const tag = t?.tagName
+      if (tag === "INPUT" || tag === "TEXTAREA" || t?.isContentEditable) return
+      if (e.code === "Space") {
+        e.preventDefault()
+        setPlaying((p) => !p)
+      } else if (e.code === "ArrowRight" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        playNextInQueue()
+      } else if (e.code === "ArrowLeft" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        playPrevInQueue()
+      } else if (e.code === "ArrowUp") {
+        e.preventDefault()
+        setVolume((v) => Math.min(1, Math.round((v + 0.05) * 100) / 100))
+      } else if (e.code === "ArrowDown") {
+        e.preventDefault()
+        setVolume((v) => Math.max(0, Math.round((v - 0.05) * 100) / 100))
+      } else if (e.key.toLowerCase() === "l" && !e.ctrlKey && !e.metaKey) {
+        setLyricsOpen(true)
+      } else if (e.key.toLowerCase() === "q" && !e.ctrlKey && !e.metaKey) {
+        setQueueOpen((v) => !v)
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [playNextInQueue, playPrevInQueue, setPlaying])
 
   useEffect(() => {
     if (!isVideo) {
@@ -162,6 +209,8 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
 
   function onClose() {
     void applyFullscreen(false)
+    setMiniPlayer(false)
+    void setWindowOnTop(false)
     closePlayer()
   }
 
@@ -169,11 +218,16 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
 
   const trackPath = player?.path || (player?.src ? filePathFromPlayerSrc(player.src) : "")
 
+  const RepeatIcon = repeat === "one" ? Repeat1 : Repeat
+
   const controls = (
     <div
       className={cn(
-        "bg-card/95 border-border flex h-[72px] shrink-0 items-center gap-4 border-t pr-6 pl-6 backdrop-blur-sm transition-opacity duration-300",
-        !isVideo && "fixed z-40 right-0 bottom-0 left-[232px]",
+        "bg-card/95 border-border flex h-[72px] shrink-0 items-center gap-3 border-t pr-4 pl-4 backdrop-blur-sm transition-opacity duration-300 sm:gap-4 sm:pr-6 sm:pl-6",
+        !isVideo && !miniPlayer && "fixed z-40 right-0 bottom-0 left-[232px]",
+        miniPlayer &&
+          !isVideo &&
+          "fixed z-[90] right-4 bottom-4 left-auto w-[min(420px,calc(100vw-2rem))] rounded-2xl border shadow-2xl",
         isVideo && !uiVisible && "pointer-events-none opacity-0",
       )}
     >
@@ -185,7 +239,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
           onEnded={onEnded}
         />
       ) : null}
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex shrink-0 items-center gap-1 sm:gap-2">
         <button
           type="button"
           aria-label="Предыдущий трек"
@@ -219,7 +273,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
           <SkipForward className="size-4" />
         </button>
       </div>
-      <div className="w-44 min-w-0 shrink-0">
+      <div className="w-28 min-w-0 shrink-0 sm:w-44">
         <p className="truncate text-sm font-medium">{player?.title ?? "—"}</p>
         <p className="text-muted-foreground truncate text-xs">
           {player?.artist ?? ""}
@@ -227,42 +281,49 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
           {queueMeta.length > 1 ? ` · ${queueMeta.index + 1}/${queueMeta.length}` : ""}
         </p>
       </div>
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <span className="text-muted-foreground w-9 shrink-0 text-xs tabular-nums">{current}</span>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.001}
-          value={Number.isFinite(progress) ? progress : 0}
-          aria-label="Позиция воспроизведения"
-          className="accent-primary h-1.5 min-w-[80px] flex-1 cursor-pointer"
-          onChange={(e) => {
-            setSeeking(true)
-            seekTo(Number(e.target.value))
-          }}
-          onMouseUp={() => setSeeking(false)}
-          onTouchEnd={() => setSeeking(false)}
-        />
-        <span className="text-muted-foreground w-9 shrink-0 text-right text-xs tabular-nums">{total}</span>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <Volume2 className="text-muted-foreground size-4 shrink-0" aria-hidden />
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.05}
-          value={volume}
-          onChange={(e) => setVolume(Number(e.target.value))}
-          className="accent-primary h-1.5 w-24 cursor-pointer"
-          aria-label="Уровень громкости"
-        />
+      {!miniPlayer ? (
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <span className="text-muted-foreground w-9 shrink-0 text-xs tabular-nums">{current}</span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.001}
+            value={Number.isFinite(progress) ? progress : 0}
+            aria-label="Позиция воспроизведения"
+            className="accent-primary h-1.5 min-w-[80px] flex-1 cursor-pointer"
+            onChange={(e) => {
+              setSeeking(true)
+              seekTo(Number(e.target.value))
+            }}
+            onMouseUp={() => setSeeking(false)}
+            onTouchEnd={() => setSeeking(false)}
+          />
+          <span className="text-muted-foreground w-9 shrink-0 text-right text-xs tabular-nums">{total}</span>
+        </div>
+      ) : (
+        <div className="min-w-0 flex-1" />
+      )}
+      <div className="relative flex shrink-0 items-center gap-0.5 sm:gap-1">
+        {!miniPlayer ? (
+          <>
+            <Volume2 className="text-muted-foreground size-4 shrink-0" aria-hidden />
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={volume}
+              onChange={(e) => setVolume(Number(e.target.value))}
+              className="accent-primary h-1.5 w-16 cursor-pointer sm:w-24"
+              aria-label="Уровень громкости"
+            />
+          </>
+        ) : null}
         {isVideo ? (
           <button
             type="button"
             aria-label={theater ? "Выйти из полного экрана" : "На весь экран"}
-            title={theater ? "Выйти (Esc)" : "На весь экран монитора"}
             onClick={() => void applyFullscreen(!theater)}
             className="text-muted-foreground hover:text-foreground flex size-9 items-center justify-center rounded-lg"
           >
@@ -271,12 +332,24 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         ) : null}
         <button
           type="button"
-          aria-label={shuffle ? "Выключить перемешивание" : "Слушать вперемешку"}
           title={
-            shuffle
-              ? "Перемешивание вкл.: без повторов до конца очереди"
-              : "Перемешать очередь (без повторов, пока все не сыграют)"
+            repeat === "off"
+              ? "Повтор выкл."
+              : repeat === "all"
+                ? "Повтор очереди"
+                : "Повтор трека"
           }
+          onClick={() => cycleRepeat()}
+          className={cn(
+            "flex size-9 items-center justify-center rounded-lg",
+            repeat !== "off" ? "text-primary" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <RepeatIcon className="size-4" />
+        </button>
+        <button
+          type="button"
+          title={shuffle ? "Перемешивание вкл." : "Вперемешку"}
           onClick={() => setShuffle((v) => !v)}
           className={cn(
             "flex size-9 items-center justify-center rounded-lg",
@@ -287,13 +360,42 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         </button>
         <button
           type="button"
-          aria-label="В плейлист"
-          title="Добавить текущий трек в плейлист(ы)"
+          title="Очередь (Q)"
+          onClick={() => setQueueOpen((v) => !v)}
+          className={cn(
+            "flex size-9 items-center justify-center rounded-lg",
+            queueOpen ? "text-primary" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <ListMusic className="size-4" />
+        </button>
+        <button
+          type="button"
+          title="Текст песни (L)"
+          onClick={() => setLyricsOpen(true)}
+          className="text-muted-foreground hover:text-foreground flex size-9 items-center justify-center rounded-lg"
+        >
+          <Mic2 className="size-4" />
+        </button>
+        <button
+          type="button"
+          title={miniPlayer ? "Обычный плеер" : "Мини-плеер поверх окон"}
+          onClick={() => setMiniPlayer((v) => !v)}
+          className={cn(
+            "flex size-9 items-center justify-center rounded-lg",
+            miniPlayer ? "text-primary" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <PictureInPicture2 className="size-4" />
+        </button>
+        <button
+          type="button"
+          title="В плейлист"
           disabled={!trackPath}
           onClick={() => setAddPlOpen(true)}
           className="text-muted-foreground hover:text-foreground flex size-9 items-center justify-center rounded-lg disabled:opacity-40"
         >
-          <ListMusic className="size-4" />
+          <span className="text-xs font-bold">+</span>
         </button>
         <button
           type="button"
@@ -303,79 +405,88 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         >
           <X className="size-4" />
         </button>
+        <PlayerQueuePanel open={queueOpen} onClose={() => setQueueOpen(false)} />
       </div>
     </div>
   )
 
-  const playlistModal = (
-    <AddToPlaylistsModal
-      open={addPlOpen}
-      path={trackPath || null}
-      trackTitle={player?.title}
-      onClose={() => setAddPlOpen(false)}
-    />
+  const extras = (
+    <>
+      <AddToPlaylistsModal
+        open={addPlOpen}
+        path={trackPath || null}
+        trackTitle={player?.title}
+        onClose={() => setAddPlOpen(false)}
+      />
+      <LyricsModal
+        open={lyricsOpen}
+        title={player?.title || ""}
+        artist={player?.artist || ""}
+        onClose={() => setLyricsOpen(false)}
+      />
+    </>
   )
 
   if (!isVideo)
     return (
       <>
         {controls}
-        {playlistModal}
+        {extras}
       </>
     )
 
   return (
     <>
-    <div
-      ref={shellRef}
-      className={cn(
-        "flex flex-col overflow-hidden",
-        theater
-          ? "fixed inset-0 z-[100] bg-black"
-          : "border-border bg-background/95 fixed right-0 bottom-0 left-[232px] z-40 border-t backdrop-blur-sm",
-      )}
-    >
       <div
+        ref={shellRef}
         className={cn(
-          "relative flex min-h-0 w-full items-center justify-center",
-          theater ? "min-h-0 flex-1 bg-black" : "bg-background",
+          "flex flex-col overflow-hidden",
+          theater
+            ? "fixed inset-0 z-[100] bg-black"
+            : "border-border bg-background/95 fixed right-0 bottom-0 left-[232px] z-40 border-t backdrop-blur-sm",
         )}
-        onDoubleClick={() => void applyFullscreen(!theater)}
       >
         <div
           className={cn(
-            "relative overflow-hidden",
-            theater
-              ? "h-full w-full bg-black"
-              : "aspect-video h-[min(38vh,calc((100vw-232px)*9/16))] w-auto max-w-full bg-zinc-950",
+            "relative flex min-h-0 w-full items-center justify-center",
+            theater ? "min-h-0 flex-1 bg-black" : "bg-background",
+          )}
+          onDoubleClick={() => void applyFullscreen(!theater)}
+        >
+          <div
+            className={cn(
+              "relative overflow-hidden",
+              theater
+                ? "h-full w-full bg-black"
+                : "aspect-video h-[min(38vh,calc((100vw-232px)*9/16))] w-auto max-w-full bg-zinc-950",
+            )}
+          >
+            <video
+              ref={mediaRef as React.RefObject<HTMLVideoElement>}
+              src={player?.src}
+              className={cn(
+                "object-contain",
+                theater ? "h-full w-full" : "absolute inset-0 h-full w-full",
+              )}
+              onTimeUpdate={onTime}
+              onEnded={onEnded}
+              onClick={() => setPlaying(!playing)}
+              controls={false}
+              playsInline
+            />
+          </div>
+        </div>
+        <div
+          className={cn(
+            "z-10 shrink-0 transition-opacity duration-300",
+            theater && "absolute inset-x-0 bottom-0",
+            theater && !uiVisible && "pointer-events-none opacity-0",
           )}
         >
-          <video
-            ref={mediaRef as React.RefObject<HTMLVideoElement>}
-            src={player?.src}
-            className={cn(
-              "object-contain",
-              theater ? "h-full w-full" : "absolute inset-0 h-full w-full",
-            )}
-            onTimeUpdate={onTime}
-            onEnded={onEnded}
-            onClick={() => setPlaying(!playing)}
-            controls={false}
-            playsInline
-          />
+          {controls}
         </div>
       </div>
-      <div
-        className={cn(
-          "z-10 shrink-0 transition-opacity duration-300",
-          theater && "absolute inset-x-0 bottom-0",
-          theater && !uiVisible && "pointer-events-none opacity-0",
-        )}
-      >
-        {controls}
-      </div>
-    </div>
-    {playlistModal}
+      {extras}
     </>
   )
 }

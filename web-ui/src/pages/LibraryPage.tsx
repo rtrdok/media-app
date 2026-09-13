@@ -1,4 +1,4 @@
-import { LayoutGrid, List, ListMusic, MoreHorizontal, Plus, Shuffle, Upload } from "lucide-react"
+import { Heart, LayoutGrid, List, ListMusic, MoreHorizontal, Plus, Search, Shuffle, Upload } from "lucide-react"
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { AddToPlaylistsModal } from "@/components/library/AddToPlaylistsModal"
 import { AppModal } from "@/components/ui/AppModal"
@@ -65,6 +65,7 @@ const SORT_LABELS: Record<"recent" | "title" | "artist", string> = {
 }
 
 const VIEW_KEY = "mediaapp.library.view"
+const FAV_NAME = "★ Любимое"
 
 function loadView(): ViewMode {
   try {
@@ -93,9 +94,11 @@ export function LibraryPage() {
   const [kind, setKind] = useState<"all" | "audio" | "video">("all")
   const [sort, setSort] = useState<"recent" | "title" | "artist">("recent")
   const [view, setView] = useState<ViewMode>(() => loadView())
+  const [query, setQuery] = useState("")
   const [items, setItems] = useState<LibItem[]>([])
   const [playlists, setPlaylists] = useState<LibraryPlaylist[]>([])
   const [activePl, setActivePl] = useState<number | null>(null)
+  const [favId, setFavId] = useState<number | null>(null)
   const [scanning, setScanning] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [createName, setCreateName] = useState("Новый плейлист")
@@ -111,7 +114,19 @@ export function LibraryPage() {
 
   const loadPlaylists = useCallback(async () => {
     const j = await libraryPlaylists()
-    if (j.ok) setPlaylists(j.items || [])
+    if (!j.ok) return
+    let list = j.items || []
+    let fav = list.find((p) => p.name === FAV_NAME)
+    if (!fav) {
+      const created = await libraryPlaylistCreate(FAV_NAME)
+      if (created.ok && created.playlist) {
+        fav = created.playlist
+        const again = await libraryPlaylists()
+        if (again.ok) list = again.items || []
+      }
+    }
+    setFavId(fav?.id ?? null)
+    setPlaylists(list)
   }, [])
 
   const load = useCallback(async () => {
@@ -189,26 +204,43 @@ export function LibraryPage() {
 
   const deferredItems = useDeferredValue(items)
 
+  const filteredItems = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return deferredItems
+    return deferredItems.filter(
+      (it) =>
+        (it.title || "").toLowerCase().includes(q) ||
+        (it.artist || "").toLowerCase().includes(q),
+    )
+  }, [deferredItems, query])
+
   const activePlaylist = useMemo(
     () => playlists.find((p) => p.id === activePl) || null,
     [playlists, activePl],
   )
 
   const audioOnly = useMemo(
-    () => deferredItems.filter((t) => (t.kind || "audio") !== "video"),
-    [deferredItems],
+    () => filteredItems.filter((t) => (t.kind || "audio") !== "video"),
+    [filteredItems],
   )
 
   function play(it: LibItem, shuffle = false) {
-    const tracks = toTracks(deferredItems)
-    const idx = deferredItems.findIndex((row) => row.path === it.path)
+    const tracks = toTracks(filteredItems)
+    const idx = filteredItems.findIndex((row) => row.path === it.path)
     playWithQueue(tracks, idx >= 0 ? idx : 0, { shuffle })
   }
 
   function playVisible(shuffle: boolean) {
-    const list = kind === "video" ? deferredItems : audioOnly.length ? audioOnly : deferredItems
+    const list = kind === "video" ? filteredItems : audioOnly.length ? audioOnly : filteredItems
     if (!list.length) return
     playWithQueue(toTracks(list), 0, { shuffle })
+  }
+
+  async function toggleFavorite(path: string) {
+    if (favId == null) return
+    await libraryPlaylistAddTracks(favId, [path])
+    await loadPlaylists()
+    if (activePl === favId) await load()
   }
 
   async function playAllPlaylistsShuffled() {
@@ -394,6 +426,11 @@ export function LibraryPage() {
           >
             В плейлист…
           </DropdownMenuItem>
+          {favId != null ? (
+            <DropdownMenuItem onClick={() => void toggleFavorite(it.path)}>
+              <Heart className="mr-2 size-3.5" />В любимое
+            </DropdownMenuItem>
+          ) : null}
           {activePl != null ? (
             <DropdownMenuItem onClick={() => void removeFromActive(it.path)}>
               Убрать из плейлиста
@@ -499,6 +536,18 @@ export function LibraryPage() {
         </div>
       </div>
 
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <div className="border-input bg-background relative min-w-[220px] flex-1 rounded-xl border">
+          <Search className="text-muted-foreground absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Поиск по названию или артисту…"
+            className="h-10 w-full rounded-xl bg-transparent pr-3 pl-10 text-sm outline-none"
+          />
+        </div>
+      </div>
+
       <div className="mb-5 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-muted-foreground mr-1 flex items-center gap-1.5 text-sm font-medium">
@@ -561,7 +610,7 @@ export function LibraryPage() {
             variant="secondary"
             size="sm"
             className="h-9 gap-2 rounded-lg"
-            disabled={!deferredItems.length}
+            disabled={!filteredItems.length}
             onClick={() => playVisible(true)}
             title={
               activePl != null
@@ -585,7 +634,7 @@ export function LibraryPage() {
           </Button>
           {activePlaylist ? (
             <p className="text-muted-foreground text-sm">
-              «{activePlaylist.name}» · {deferredItems.length} трек(ов)
+              «{activePlaylist.name}» · {filteredItems.length} трек(ов)
             </p>
           ) : !playlists.length ? (
             <p className="text-muted-foreground text-sm">Пока пусто — создай плейлист.</p>
@@ -596,16 +645,18 @@ export function LibraryPage() {
       <div>
         {view === "grid" ? (
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {deferredItems.map((it, i) => itemCard(it, i))}
+            {filteredItems.map((it, i) => itemCard(it, i))}
           </div>
         ) : (
-          <div className="space-y-1">{deferredItems.map((it, i) => itemRow(it, i))}</div>
+          <div className="space-y-1">{filteredItems.map((it, i) => itemRow(it, i))}</div>
         )}
-        {deferredItems.length === 0 ? (
+        {filteredItems.length === 0 ? (
           <p className="text-muted-foreground mt-8 text-sm">
-            {activePl != null
-              ? "В плейлисте пока нет треков. Добавь через меню ⋯ у файла или кнопку в плеере."
-              : "Библиотека пуста. Скачайте медиа — список обновится сам, или нажмите «Сканировать»."}
+            {query.trim()
+              ? "Ничего не найдено по запросу."
+              : activePl != null
+                ? "В плейлисте пока нет треков. Добавь через меню ⋯ у файла или кнопку в плеере."
+                : "Библиотека пуста. Скачайте медиа — список обновится сам, или нажмите «Сканировать»."}
           </p>
         ) : null}
       </div>

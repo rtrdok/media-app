@@ -1,13 +1,13 @@
-# Zip portable build for GitHub Releases
+# Zip portable build + optional installer for GitHub Releases
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $dist = Join-Path $root "dist\MediaApp"
 $out = Join-Path $root "dist\MediaApp.zip"
+$py = Join-Path $root ".venv\Scripts\python.exe"
 if (-not (Test-Path (Join-Path $dist "MediaApp.exe"))) {
   throw "Build exe first: scripts\build-exe.ps1"
 }
 if (Test-Path $out) { Remove-Item $out -Force }
-# Не кладём пользовательские данные в релизный zip
 $exclude = @(".env", "cookies.txt", "history.db", "media_app.log", "config", "file_cache")
 $staging = Join-Path $root "dist\MediaApp_release_staging"
 if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
@@ -20,3 +20,9 @@ foreach ($name in $exclude) {
 Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $out -Force
 Remove-Item $staging -Recurse -Force
 Write-Host "Done: $out"
+
+# Installer (friends-friendly)
+if (Test-Path $py) {
+  & $py (Join-Path $root "scripts\build_installer.py")
+  Write-Host "Installer: dist\MediaApp-Installer.exe"
+}

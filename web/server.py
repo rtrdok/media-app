@@ -57,6 +57,7 @@ THUMBS = BASE_DIR / "file_cache" / "thumbs"
 _LISTEN_PORT = 17865
 _show_window_cb = None
 _fullscreen_cb = None
+_on_top_cb = None
 
 
 def set_listen_port(port: int) -> None:
@@ -76,6 +77,11 @@ def set_show_window_callback(cb) -> None:
 def set_fullscreen_callback(cb) -> None:
     global _fullscreen_cb
     _fullscreen_cb = cb
+
+
+def set_on_top_callback(cb) -> None:
+    global _on_top_cb
+    _on_top_cb = cb
 
 
 def _fmt_height(h: int) -> str:
@@ -239,6 +245,7 @@ class PreviewIn(BaseModel):
 class SettingsIn(BaseModel):
     download_dir: str | None = None
     theme: str | None = None
+    accent: str | None = None
     rate_limit: str | None = None
     subtitles: str | None = None
     minimize_to_tray: bool | None = None
@@ -253,6 +260,17 @@ class SettingsIn(BaseModel):
     max_concurrent_downloads: int | None = None
     use_proxy: bool | None = None
     proxy_list: str | None = None
+    onboarding_done: bool | None = None
+
+
+class LyricsIn(BaseModel):
+    title: str = ""
+    artist: str = ""
+    duration: float | None = None
+
+
+class OnTopIn(BaseModel):
+    enable: bool = True
 
 
 class HistoryPatchIn(BaseModel):
@@ -629,6 +647,7 @@ async def save_settings(body: SettingsIn):
     data = update_settings(
         download_dir=body.download_dir,
         theme=body.theme,
+        accent=body.accent,
         rate_limit=body.rate_limit,
         subtitles=body.subtitles,
         minimize_to_tray=body.minimize_to_tray,
@@ -643,6 +662,7 @@ async def save_settings(body: SettingsIn):
         max_concurrent_downloads=body.max_concurrent_downloads,
         use_proxy=body.use_proxy,
         proxy_list=body.proxy_list,
+        onboarding_done=body.onboarding_done,
     )
     if body.desktop_shortcut != prev_shortcut or body.autostart != prev_autostart:
         try:
@@ -1016,6 +1036,25 @@ async def window_fullscreen(body: FullscreenIn | None = None):
         except Exception:
             ok = False
     return {"ok": ok}
+
+
+@app.post("/api/window/on_top")
+async def window_on_top(body: OnTopIn):
+    ok = False
+    if _on_top_cb is not None:
+        try:
+            _on_top_cb(bool(body.enable))
+            ok = True
+        except Exception:
+            ok = False
+    return {"ok": ok, "enable": bool(body.enable)}
+
+
+@app.post("/api/lyrics")
+async def api_lyrics(body: LyricsIn):
+    from media_core.lyrics import fetch_lyrics
+
+    return await asyncio.to_thread(fetch_lyrics, body.title, body.artist, body.duration)
 
 
 @app.post("/api/cookies/from-extension")

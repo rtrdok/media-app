@@ -2,12 +2,14 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useApp } from "@/context/AppProvider"
 import { cancelJob, getClipboard, queueClear, queuePause, queueResume } from "@/lib/api"
+import { cn } from "@/lib/utils"
 
 export function DownloadsPage() {
   const { state, refresh } = useApp()
   const p = state?.progress
   const queue = state?.queue ?? []
   const files = state?.files ?? []
+  const paused = !!state?.paused
 
   return (
     <div className="w-full pt-8 pr-8 pb-32 pl-8">
@@ -22,30 +24,42 @@ export function DownloadsPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-muted-foreground text-sm">
-            {state?.busy
-              ? [p?.stage, p?.percent, p?.speed, p?.eta].filter(Boolean).join(" · ") || "Загрузка…"
-              : "Нет активной загрузки"}
+            {paused
+              ? "Очередь на паузе"
+              : state?.busy
+                ? [p?.stage, p?.percent, p?.speed, p?.eta].filter(Boolean).join(" · ") || "Загрузка…"
+                : "Нет активной загрузки"}
           </p>
           <div className="bg-muted h-2 overflow-hidden rounded-full">
             <div
-              className="bg-primary h-full transition-all"
+              className={cn("bg-primary h-full transition-all", paused && "opacity-40")}
               style={{
                 width: p?.indeterminate ? "40%" : `${Math.min(100, Number(p?.percent) || 0)}%`,
               }}
             />
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <Button variant="outline" size="sm" onClick={() => void queuePause().then(() => refresh(true))}>
-              Пауза очереди
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => void queueResume().then(() => refresh(true))}>
-              Продолжить
-            </Button>
+            {paused ? (
+              <Button
+                size="sm"
+                onClick={() => void queueResume().then(() => refresh(true))}
+              >
+                Продолжить очередь
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void queuePause().then(() => refresh(true))}
+              >
+                Пауза очереди
+              </Button>
+            )}
             <Button variant="ghost" size="sm" onClick={() => void queueClear().then(() => refresh(true))}>
               Очистить очередь
             </Button>
             <Button variant="ghost" size="sm" className="text-destructive" onClick={() => void cancelJob()}>
-              Отмена
+              Отмена текущей
             </Button>
             <Button
               variant="ghost"
@@ -64,7 +78,10 @@ export function DownloadsPage() {
 
       <Card className="mb-6 rounded-2xl">
         <CardHeader>
-          <CardTitle className="text-lg">Очередь ({queue.length})</CardTitle>
+          <CardTitle className="text-lg">
+            Очередь ({queue.length})
+            {paused ? <span className="text-muted-foreground ml-2 text-sm font-normal">· пауза</span> : null}
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           {queue.length === 0 ? (
