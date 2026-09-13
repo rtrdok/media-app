@@ -239,6 +239,8 @@ def scan_library(force: bool = False) -> dict:
 
 def remove_library_item(path: str, *, delete_file: bool = True) -> dict:
     """Удалить файл из библиотеки (индекс + плейлисты) и опционально с диска."""
+    import time
+
     from media_core.database import library_index_remove_path
 
     path_s = str(path or "").strip()
@@ -246,18 +248,41 @@ def remove_library_item(path: str, *, delete_file: bool = True) -> dict:
         return {"ok": False, "error": "Путь не указан"}
 
     p = Path(path_s)
+    # нормализуем путь как в индексе
+    try:
+        p = p.resolve()
+        path_s = str(p)
+    except OSError:
+        pass
+
     removed_db = library_index_remove_path(path_s)
+    if not removed_db:
+        # повтор с исходной строкой / другим слэшем
+        alt = path_s.replace("/", "\\") if "/" in path_s else path_s.replace("\\", "/")
+        if alt != path_s:
+            removed_db = library_index_remove_path(alt) or removed_db
+
     deleted = False
     err = ""
     if delete_file and p.is_file():
-        try:
-            p.unlink()
-            deleted = True
-        except OSError as e:
-            err = str(e)
-    # обложка в кэше — не трогаем чужие файлы вне download/covers; cover_path может быть рядом
+        for attempt in range(5):
+            try:
+                p.unlink()
+                deleted = True
+                err = ""
+                break
+            except OSError as e:
+                err = str(e)
+                time.sleep(0.25 * (attempt + 1))
+    elif delete_file and not p.is_file():
+        # уже нет на диске — считаем успехом, если убрали из индекса
+        deleted = False
+        if not removed_db:
+            err = "Файл не найден"
+
+    ok = removed_db or deleted or (delete_file and not p.is_file())
     return {
-        "ok": True,
+        "ok": bool(ok),
         "removed_from_index": removed_db,
         "file_deleted": deleted,
         "error": err or None,

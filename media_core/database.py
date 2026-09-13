@@ -539,13 +539,31 @@ def library_index_delete_missing(keep_paths: set[str]) -> None:
 
 
 def library_index_remove_path(path: str) -> bool:
-    """Убрать путь из индекса и всех плейлистов."""
+    """Убрать путь из индекса и всех плейлистов (с учётом разных слэшей)."""
+    path = str(path or "").strip()
+    if not path:
+        return False
+    variants = {path, path.replace("/", "\\"), path.replace("\\", "/")}
     conn = _connect()
     try:
-        conn.execute("DELETE FROM library_playlist_items WHERE path = ?", (path,))
-        cur = conn.execute("DELETE FROM library_index WHERE path = ?", (path,))
+        removed = False
+        for p in variants:
+            conn.execute("DELETE FROM library_playlist_items WHERE path = ?", (p,))
+            cur = conn.execute("DELETE FROM library_index WHERE path = ?", (p,))
+            if cur.rowcount > 0:
+                removed = True
+        # также case-insensitive на Windows
+        if not removed:
+            low = path.lower().replace("/", "\\")
+            rows = conn.execute("SELECT path FROM library_index").fetchall()
+            for r in rows:
+                rp = str(r["path"] or "")
+                if rp.lower().replace("/", "\\") == low:
+                    conn.execute("DELETE FROM library_playlist_items WHERE path = ?", (rp,))
+                    conn.execute("DELETE FROM library_index WHERE path = ?", (rp,))
+                    removed = True
         conn.commit()
-        return cur.rowcount > 0
+        return removed
     finally:
         conn.close()
 

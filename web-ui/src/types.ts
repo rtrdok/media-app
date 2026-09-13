@@ -108,6 +108,8 @@ export type PlayerTrack = {
   kind?: "audio" | "video"
   /** Локальный путь файла (для добавления в плейлисты). */
   path?: string
+  /** Обложка / превью для панели плеера. */
+  thumb?: string
 }
 
 export type AnimeCandidate = {

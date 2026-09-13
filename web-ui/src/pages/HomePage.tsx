@@ -20,6 +20,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { useApp } from "@/context/AppProvider"
 import {
   cancelJob,
@@ -256,13 +263,6 @@ export function HomePage() {
       ? qualities
       : DEFAULT_QUALITIES.map((q) => ({ value: q.value, label: q.label }))
 
-  const selectedQuality = qualityOptions.find((q) => q.value === quality)
-  const qualityTriggerLabel = selectedQuality
-    ? `Качество: ${selectedQuality.label}`
-    : quality === "best"
-      ? "Качество: Оригинал"
-      : `Качество: ${quality}p`
-
   return (
     <div className="w-full pt-8 pr-8 pb-32 pl-8">
       <div className="mb-8">
@@ -378,38 +378,35 @@ export function HomePage() {
       </div>
 
       <div className="border-border mb-8 flex flex-wrap items-center gap-6 border-b pb-6">
-        <label className="border-border bg-muted/50 relative flex h-9 min-w-[14rem] max-w-[min(100%,28rem)] items-center rounded-lg border px-3">
-          <span className="sr-only">Качество</span>
-          <select
-            value={quality}
-            onChange={(e) => setQuality(e.target.value)}
-            className="text-foreground absolute inset-0 cursor-pointer appearance-none bg-transparent pr-8 pl-3 text-sm opacity-0"
-            aria-label="Качество"
-          >
+        <Select value={quality} onValueChange={(v) => v && setQuality(v)}>
+          <SelectTrigger className="h-9 min-w-[14rem] max-w-[min(100%,28rem)]" aria-label="Качество">
+            <SelectValue>
+              {(v) => {
+                const q = qualityOptions.find((x) => x.value === String(v))
+                return q ? `Качество: ${q.label}` : `Качество: ${String(v)}`
+              }}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent className="bg-popover text-popover-foreground">
             {qualityOptions.map((q) => (
-              <option key={q.value} value={q.value}>
+              <SelectItem key={q.value} value={q.value}>
                 Качество: {q.label}
-              </option>
+              </SelectItem>
             ))}
-          </select>
-          <span className="truncate text-sm">{qualityTriggerLabel}</span>
-        </label>
-        <label className="border-border bg-muted/50 relative flex h-9 w-[9.5rem] shrink-0 items-center rounded-lg border px-3">
-          <span className="sr-only">Формат</span>
-          <select
-            value={fmt}
-            onChange={(e) => setFmt(e.target.value)}
-            className="text-foreground absolute inset-0 cursor-pointer appearance-none bg-transparent text-sm opacity-0"
-            aria-label="Формат"
-          >
+          </SelectContent>
+        </Select>
+        <Select value={fmt} onValueChange={(v) => v && setFmt(v)}>
+          <SelectTrigger className="h-9 w-[9.5rem]" aria-label="Формат">
+            <SelectValue>{(v) => `Формат: ${String(v)}`}</SelectValue>
+          </SelectTrigger>
+          <SelectContent className="bg-popover text-popover-foreground">
             {["MP4", "WEBM", "MKV", "MOV", "AVI", "MP3"].map((f) => (
-              <option key={f} value={f}>
+              <SelectItem key={f} value={f}>
                 Формат: {f}
-              </option>
+              </SelectItem>
             ))}
-          </select>
-          <span className="truncate text-sm">Формат: {fmt}</span>
-        </label>
+          </SelectContent>
+        </Select>
         <div className="text-muted-foreground flex items-center gap-2 text-sm">
           <Switch checked={clip} onCheckedChange={setClip} id="clip" />
           <label htmlFor="clip">Клип</label>

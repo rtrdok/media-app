@@ -11,6 +11,8 @@ type Props = {
   duration?: number
   onSeek?: (sec: number) => void
   onClose: () => void
+  /** Вызывается, когда загрузка текста завершилась (успех или ошибка). */
+  onSettled?: () => void
   /** true = панель в основной зоне UI; false = компактный оверлей */
   docked?: boolean
 }
@@ -49,6 +51,7 @@ export function LyricsPanel({
   duration,
   onSeek,
   onClose,
+  onSettled,
   docked = true,
 }: Props) {
   const [raw, setRaw] = useState("")
@@ -56,24 +59,39 @@ export function LyricsPanel({
   const [msg, setMsg] = useState("Загрузка…")
   const [busy, setBusy] = useState(false)
   const activeRef = useRef<HTMLButtonElement | null>(null)
+  const onSettledRef = useRef(onSettled)
+  onSettledRef.current = onSettled
+  // Не дергаем повторный запрос при каждом обновлении duration с плеера
+  const durationKey = duration && duration > 1 ? Math.round(duration) : 0
 
   useEffect(() => {
     if (!open) return
+    let cancelled = false
     setBusy(true)
     setMsg("Ищем текст…")
     setRaw("")
     setSyncedFlag(false)
-    void fetchLyrics(title, artist, duration)
+    void fetchLyrics(title, artist, durationKey || undefined)
       .then((j) => {
+        if (cancelled) return
         if (j.ok && j.lyrics) {
           setRaw(j.lyrics)
           setSyncedFlag(Boolean(j.synced))
           setMsg("")
         } else setMsg(j.error || "Текст не найден")
       })
-      .catch((e) => setMsg(String(e)))
-      .finally(() => setBusy(false))
-  }, [open, title, artist, duration])
+      .catch((e) => {
+        if (!cancelled) setMsg(String(e))
+      })
+      .finally(() => {
+        if (cancelled) return
+        setBusy(false)
+        onSettledRef.current?.()
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, title, artist, durationKey])
 
   const lines = useMemo(() => (raw ? parseLrc(raw) : null), [raw])
   const synced = Boolean(lines && (syncedFlag || lines.length > 0))

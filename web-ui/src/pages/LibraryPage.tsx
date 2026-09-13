@@ -85,12 +85,13 @@ function toTracks(rows: LibItem[]) {
       path: row.path,
       duration: row.duration,
       kind: row.kind,
+      cover: row.cover,
     }),
   )
 }
 
 export function LibraryPage() {
-  const { playWithQueue, state } = useApp()
+  const { playWithQueue, state, player, closePlayer } = useApp()
   const [kind, setKind] = useState<"all" | "audio" | "video">("all")
   const [sort, setSort] = useState<"recent" | "title" | "artist">("recent")
   const [view, setView] = useState<ViewMode>(() => loadView())
@@ -311,11 +312,24 @@ export function LibraryPage() {
     if (!removePath) return
     setRemoveBusy(true)
     try {
-      await libraryRemove(removePath, true)
+      // файл занят плеером — сначала остановить
+      const playingPath = player?.path || ""
+      const norm = (s: string) => s.replace(/\//g, "\\").toLowerCase()
+      if (playingPath && norm(playingPath) === norm(removePath)) {
+        closePlayer()
+        await new Promise((r) => window.setTimeout(r, 350))
+      }
+      const j = await libraryRemove(removePath, true)
+      if (!j.ok || j.error) {
+        window.alert(j.error || "Не удалось удалить файл (возможно, он открыт в другом приложении).")
+        return
+      }
       setRemovePath(null)
       setRemoveTitle(undefined)
       await load()
       await loadPlaylists()
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e))
     } finally {
       setRemoveBusy(false)
     }
@@ -406,7 +420,7 @@ export function LibraryPage() {
         >
           <MoreHorizontal className="size-4" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+        <DropdownMenuContent align="end" className="min-w-56">
           <DropdownMenuItem onClick={() => play(it)}>Воспроизвести</DropdownMenuItem>
           <DropdownMenuItem onClick={() => play(it, true)}>Вперемешку с этого</DropdownMenuItem>
           <DropdownMenuItem onClick={() => void openPath(it.path)}>Открыть файл</DropdownMenuItem>

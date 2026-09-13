@@ -18,6 +18,7 @@ export function playerTrackFromHistory(it: HistoryItem): PlayerTrack {
     src: fileUrl(it.dest),
     durationLabel: it.duration,
     kind: mediaKindFromPath(it.dest),
+    thumb: it.thumb || undefined,
   }
 }
 
@@ -27,6 +28,7 @@ export function playerTrackFromLibrary(it: {
   path: string
   duration?: string
   kind?: string
+  cover?: string
 }): PlayerTrack {
   const kind = it.kind === "video" ? "video" : mediaKindFromPath(it.path)
   return {
@@ -36,6 +38,7 @@ export function playerTrackFromLibrary(it: {
     durationLabel: it.duration,
     kind,
     path: it.path,
+    thumb: it.cover || undefined,
   }
 }
 

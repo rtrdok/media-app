@@ -1164,27 +1164,32 @@ async def mini_page():
 <title>Media App</title>
 <style>
   html,body{margin:0;height:100%;overflow:hidden;font-family:Segoe UI,system-ui,sans-serif;
-    background:linear-gradient(135deg,#0f172a,#1e293b);color:#f8fafc;user-select:none}
-  .bar{display:flex;align-items:center;gap:10px;height:100%;padding:10px 14px;box-sizing:border-box;
-    -webkit-app-region:drag}
-  .btn{-webkit-app-region:no-drag;border:0;background:transparent;color:#e2e8f0;cursor:pointer;
-    width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:14px}
+    background:#0f172a;color:#f8fafc;user-select:none}
+  .bar{display:flex;align-items:center;gap:8px;height:100%;padding:6px 10px;box-sizing:border-box;
+    -webkit-app-region:drag;app-region:drag}
+  .nodrag{-webkit-app-region:no-drag;app-region:no-drag;display:flex;align-items:center;gap:6px}
+  .btn{-webkit-app-region:no-drag;app-region:no-drag;border:0;background:transparent;color:#e2e8f0;cursor:pointer;
+    width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:12px}
   .btn:hover{background:rgba(255,255,255,.08)}
-  .play{background:#14b8a6;color:#fff;border-radius:999px;width:42px;height:42px}
+  .play{background:#14b8a6;color:#fff;border-radius:999px;width:32px;height:32px}
   .play:hover{filter:brightness(1.08)}
-  .meta{min-width:0;flex:1}
-  .title{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .artist{font-size:11px;opacity:.65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .vol{-webkit-app-region:no-drag;width:90px;accent-color:#14b8a6}
+  .meta{min-width:0;flex:1;-webkit-app-region:drag;app-region:drag}
+  .title{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .artist{font-size:10px;opacity:.65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .vol{-webkit-app-region:no-drag;app-region:no-drag;width:88px;height:18px;accent-color:#14b8a6;cursor:pointer}
   .x{opacity:.7}
 </style></head><body>
 <div class="bar">
-  <button class="btn" id="prev" title="Предыдущий">&#9198;</button>
-  <button class="btn play" id="toggle" title="Play/Pause">&#9654;</button>
-  <button class="btn" id="next" title="Следующий">&#9197;</button>
+  <div class="nodrag">
+    <button class="btn" id="prev" title="Предыдущий">&#9198;</button>
+    <button class="btn play" id="toggle" title="Play/Pause">&#9654;</button>
+    <button class="btn" id="next" title="Следующий">&#9197;</button>
+  </div>
   <div class="meta"><div class="title" id="title">&mdash;</div><div class="artist" id="artist"></div></div>
-  <input class="vol" id="vol" type="range" min="0" max="1" step="0.05" value="0.85" title="Громкость"/>
-  <button class="btn x" id="close" title="Закрыть мини-плеер">&#10005;</button>
+  <div class="nodrag" id="volwrap">
+    <input class="vol" id="vol" type="range" min="0" max="1" step="0.05" value="0.85" title="Громкость"/>
+    <button class="btn x" id="close" title="Закрыть мини-плеер">&#10005;</button>
+  </div>
 </div>
 <script>
 async function j(url, opt){const r=await fetch(url,opt);return r.json()}
@@ -1194,6 +1199,12 @@ function ctrl(action,value){
 }
 const title=document.getElementById('title'), artist=document.getElementById('artist');
 const toggle=document.getElementById('toggle'), vol=document.getElementById('vol');
+const volwrap=document.getElementById('volwrap');
+function blockDrag(e){e.stopPropagation()}
+;['pointerdown','mousedown','touchstart'].forEach(ev=>{
+  volwrap.addEventListener(ev, blockDrag, true);
+  vol.addEventListener(ev, blockDrag, true);
+});
 document.getElementById('prev').onclick=()=>ctrl('prev');
 document.getElementById('next').onclick=()=>ctrl('next');
 toggle.onclick=()=>ctrl('toggle');

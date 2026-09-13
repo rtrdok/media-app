@@ -3,6 +3,7 @@ import {
   Maximize,
   Mic2,
   Minimize,
+  Music2,
   Pause,
   PictureInPicture2,
   Play,
@@ -68,6 +69,8 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   volumeRef.current = volume
   const playingRef = useRef(playing)
   playingRef.current = playing
+  /** После загрузки текста — продолжить, если перед открытием играло. */
+  const resumeAfterLyrics = useRef(false)
 
   const hidden = page === "settings" && !showOnSettings
   const hasSrc = Boolean(player?.src)
@@ -137,6 +140,30 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [theater])
 
+  function setLyricsOpenSafe(next: boolean) {
+    if (next) {
+      if (playingRef.current) {
+        resumeAfterLyrics.current = true
+        setPlaying(false)
+      } else {
+        resumeAfterLyrics.current = false
+      }
+      setLyricsOpen(true)
+      return
+    }
+    setLyricsOpen(false)
+    if (resumeAfterLyrics.current) {
+      resumeAfterLyrics.current = false
+      setPlaying(true)
+    }
+  }
+
+  function onLyricsSettled() {
+    if (!resumeAfterLyrics.current) return
+    resumeAfterLyrics.current = false
+    setPlaying(true)
+  }
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null
@@ -158,14 +185,14 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         e.preventDefault()
         setVolume((v) => Math.max(0, Math.round((v - 0.05) * 100) / 100))
       } else if (e.key.toLowerCase() === "l" && !e.ctrlKey && !e.metaKey) {
-        setLyricsOpen((v) => !v)
+        setLyricsOpenSafe(!lyricsOpen)
       } else if (e.key.toLowerCase() === "q" && !e.ctrlKey && !e.metaKey) {
         setQueueOpen((v) => !v)
       }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [playNextInQueue, playPrevInQueue, setPlaying])
+  }, [playNextInQueue, playPrevInQueue, setPlaying, lyricsOpen])
 
   useEffect(() => {
     if (!isVideo) {
@@ -243,7 +270,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   }, [hasSrc, miniPlayer, setMiniPlayer])
 
   useEffect(() => {
-    if (miniPlayer) setLyricsOpen(false)
+    if (miniPlayer) setLyricsOpenSafe(false)
   }, [miniPlayer])
 
   const onTime = () => {
@@ -329,7 +356,21 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
       )}
     >
       {/* Left */}
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <div className="bg-muted border-border/60 relative size-12 shrink-0 overflow-hidden rounded-md border">
+          {player?.thumb ? (
+            <img
+              src={player.thumb}
+              alt=""
+              className="size-full object-cover"
+              draggable={false}
+            />
+          ) : (
+            <div className="text-muted-foreground flex size-full items-center justify-center">
+              <Music2 className="size-5 opacity-70" aria-hidden />
+            </div>
+          )}
+        </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">{player?.title ?? "—"}</p>
           <p className="text-muted-foreground truncate text-xs">
@@ -448,7 +489,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         <button
           type="button"
           title="Текст песни (L)"
-          onClick={() => setLyricsOpen((v) => !v)}
+          onClick={() => setLyricsOpenSafe(!lyricsOpen)}
           className={cn(
             "flex size-8 items-center justify-center rounded-lg",
             lyricsOpen ? "text-primary" : "text-muted-foreground hover:text-foreground",
@@ -519,7 +560,8 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         currentTime={currentSec}
         duration={durationSec || undefined}
         onSeek={seekToSec}
-        onClose={() => setLyricsOpen(false)}
+        onClose={() => setLyricsOpenSafe(false)}
+        onSettled={onLyricsSettled}
         docked={false}
       />
     </>

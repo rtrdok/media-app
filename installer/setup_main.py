@@ -12,7 +12,7 @@ from pathlib import Path
 from tkinter import filedialog
 
 APP_NAME = "Media App"
-APP_VERSION = "1.4.5"
+APP_VERSION = "1.4.6"
 DEFAULT_TARGET = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "MediaApp"
 START_MENU = (
     Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))

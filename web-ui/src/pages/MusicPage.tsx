@@ -210,6 +210,7 @@ export function MusicPage() {
         src: j.stream,
         durationLabel: t.duration_label || undefined,
         kind: "audio",
+        thumb: j.cover || t.cover || undefined,
       })
       setPlaying(true)
     } catch (e) {
