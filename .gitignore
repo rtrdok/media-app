@@ -1,0 +1,37 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Env / secrets / local runtime
+.env
+cookies.txt
+*.log
+history.db
+file_cache/
+config/
+MediaApp-Cookies-Extension/
+MediaApp-Cookies-Extension.zip
+_tmp_ext.zip
+installer/payload.zip
+installer/app.ico
+
+# Build outputs
+build/
+dist/
+*.zip
+
+# Frontend
+web-ui/node_modules/
+web-ui/dist/
+web-ui/**/*.map
+branding/_render/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.cursor/

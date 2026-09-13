@@ -1,0 +1,366 @@
+import type { AppSettings, AppState, HistoryItem } from "@/types"
+
+async function json<T>(url: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(url, init)
+  if (!r.ok) throw new Error(await r.text())
+  return r.json() as Promise<T>
+}
+
+export function fetchState(files = false): Promise<AppState> {
+  return json(`/api/state${files ? "?files=1" : ""}`)
+}
+
+export function postJob(body: Record<string, unknown>) {
+  return json<{ ok: boolean }>("/api/job", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+}
+
+export function cancelJob() {
+  return fetch("/api/cancel", { method: "POST" })
+}
+
+export function ackNotify() {
+  return fetch("/api/notify/ack", { method: "POST" })
+}
+
+export function previewUrl(url: string) {
+  return json<{
+    ok: boolean
+    error?: string
+    platform?: string
+    platform_name?: string
+    title?: string
+    thumb?: string
+    duration?: string
+    uploader?: string
+    qualities?: { value: string; label: string }[]
+  }>("/api/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  })
+}
+
+export function getClipboard() {
+  return json<{ ok: boolean; text?: string }>("/api/clipboard")
+}
+
+export function patchHistory(id: number, body: { favorite?: boolean; tags?: string[] }) {
+  return json<{ ok: boolean; item: HistoryItem }>(`/api/history/${id}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteHistory(id: number) {
+  return fetch(`/api/history/${id}`, { method: "DELETE" })
+}
+
+export function clearHistory() {
+  return fetch("/api/history/clear", { method: "POST" })
+}
+
+export function saveSettings(body: Partial<AppSettings>) {
+  return json<AppSettings>("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+}
+
+export function queuePause() {
+  return fetch("/api/queue/pause", { method: "POST" })
+}
+
+export function queueResume() {
+  return fetch("/api/queue/resume", { method: "POST" })
+}
+
+export function queueClear() {
+  return fetch("/api/queue/clear", { method: "POST" })
+}
+
+export function openPath(path = "") {
+  return fetch("/api/open", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  })
+}
+
+export function openUrl(url: string) {
+  return fetch("/api/open_url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  })
+}
+
+export function setWindowFullscreen(enable: boolean | null = null) {
+  return fetch("/api/window/fullscreen", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enable }),
+  })
+}
+
+export function fileUrl(path: string) {
+  return `/api/file?p=${encodeURIComponent(path)}`
+}
+
+export function fetchLibrary(by = "flat", extra = "") {
+  const qs = extra.replace(/^\&/, "")
+  return json<{ ok: boolean; items: Record<string, unknown>[]; count?: number }>(
+    `/api/library?by=${encodeURIComponent(by)}${qs ? `&${qs}` : ""}`,
+  )
+}
+
+export function libraryRescan() {
+  return fetch("/api/library/rescan", { method: "POST" })
+}
+
+export function libraryRemove(path: string, deleteFile = true) {
+  return json<{ ok: boolean; file_deleted?: boolean; error?: string | null }>(
+    "/api/library/remove",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, delete_file: deleteFile }),
+    },
+  )
+}
+
+export type LibraryPlaylist = {
+  id: number
+  name: string
+  track_count?: number
+  created_at?: number
+  updated_at?: number
+}
+
+export function libraryPlaylists() {
+  return json<{ ok: boolean; items?: LibraryPlaylist[] }>("/api/library/playlists")
+}
+
+export function libraryPlaylistCreate(name: string) {
+  return json<{ ok: boolean; playlist?: LibraryPlaylist; error?: string }>("/api/library/playlists", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export function libraryPlaylistRename(id: number, name: string) {
+  return json<{ ok: boolean; playlist?: LibraryPlaylist; error?: string }>(
+    `/api/library/playlists/${id}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+  )
+}
+
+export function libraryPlaylistDelete(id: number) {
+  return json<{ ok: boolean }>(`/api/library/playlists/${id}`, { method: "DELETE" })
+}
+
+export function libraryPlaylistDetail(id: number) {
+  return json<{
+    ok: boolean
+    playlist?: LibraryPlaylist
+    tracks?: Record<string, unknown>[]
+    error?: string
+  }>(`/api/library/playlists/${id}`)
+}
+
+export function libraryPlaylistAddTracks(id: number, paths: string[]) {
+  return json<{ ok: boolean; added?: number; error?: string }>(
+    `/api/library/playlists/${id}/tracks`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths }),
+    },
+  )
+}
+
+export function libraryPlaylistRemoveTrack(id: number, path: string) {
+  return json<{ ok: boolean }>(
+    `/api/library/playlists/${id}/tracks?path=${encodeURIComponent(path)}`,
+    { method: "DELETE" },
+  )
+}
+
+export function checkUpdate(quiet = false) {
+  return json<{
+    ok: boolean
+    current?: string
+    remote?: string
+    update?: { version: string; url: string; changelog?: string } | null
+    message?: string
+    changelog?: string
+    error?: string
+  }>(`/api/app/check_update?quiet=${quiet ? 1 : 0}`, { method: "POST" })
+}
+
+export function applyUpdate() {
+  return json<{
+    ok: boolean
+    applied?: boolean
+    restart?: boolean
+    message?: string
+    error?: string
+  }>("/api/app/apply_update", { method: "POST" })
+}
+
+export function cookiesStatus() {
+  return json<{ ok: boolean; active: boolean; path?: string }>("/api/cookies/status")
+}
+
+export function extensionSave() {
+  return json<{ ok: boolean; path?: string; folder?: string }>("/api/extension/save", {
+    method: "POST",
+  })
+}
+
+export function cookiesOpenFolder() {
+  return fetch("/api/cookies/open", { method: "POST" })
+}
+
+export function backupExport() {
+  window.location.href = "/api/backup/export"
+}
+
+export function backupImport(file: File) {
+  const fd = new FormData()
+  fd.append("file", file)
+  return json<{ ok: boolean; error?: string }>("/api/backup/import", { method: "POST", body: fd })
+}
+
+export function uploadShazam(file: File) {
+  const fd = new FormData()
+  fd.append("file", file)
+  return json<{ ok: boolean; title?: string; artist?: string; error?: string }>(
+    "/api/shazam/file",
+    { method: "POST", body: fd },
+  )
+}
+
+export function uploadAnime(file: File) {
+  const fd = new FormData()
+  fd.append("file", file)
+  return fetch("/api/anime", { method: "POST", body: fd })
+}
+
+export function playlistUrls(url: string) {
+  return json<{ ok: boolean; entries?: { title: string; url: string }[]; error?: string }>(
+    "/api/playlist",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    },
+  )
+}
+
+export type YandexPlaylist = {
+  id: string
+  kind: string
+  uid: string
+  title: string
+  track_count?: number | null
+  is_likes?: boolean
+  access_hash?: string
+}
+
+export type YandexTrack = {
+  id: string
+  album_id?: string
+  title: string
+  artist: string
+  album?: string
+  label: string
+  duration?: number | null
+  duration_label?: string
+  url: string
+  cover?: string
+}
+
+export function yandexStatus() {
+  return json<{ ok: boolean; configured?: boolean; login?: string; uid?: string; error?: string }>(
+    "/api/yandex/status",
+  )
+}
+
+export function yandexPlaylists() {
+  return json<{ ok: boolean; items?: YandexPlaylist[]; error?: string }>("/api/yandex/playlists")
+}
+
+export function yandexPlaylistTracks(kind: string, uid = "") {
+  const qs = new URLSearchParams({ kind })
+  if (uid) qs.set("uid", uid)
+  return json<{ ok: boolean; title?: string; tracks?: YandexTrack[]; count?: number; error?: string }>(
+    `/api/yandex/playlist?${qs}`,
+  )
+}
+
+export function yandexDownload(urls: string[]) {
+  return json<{ ok: boolean; ids?: number[]; count?: number; error?: string }>("/api/yandex/download", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ urls }),
+  })
+}
+
+export type VkPlaylist = YandexPlaylist
+export type VkTrack = YandexTrack
+
+export function vkStatus() {
+  return json<{ ok: boolean; configured?: boolean; login?: string; uid?: string; error?: string }>("/api/vk/status")
+}
+
+export function vkPlaylists() {
+  return json<{ ok: boolean; items?: VkPlaylist[]; error?: string }>("/api/vk/playlists")
+}
+
+export function vkPlaylistTracks(kind: string, uid = "", accessHash = "") {
+  const qs = new URLSearchParams({ kind })
+  if (uid) qs.set("uid", uid)
+  if (accessHash) qs.set("access_hash", accessHash)
+  return json<{ ok: boolean; title?: string; tracks?: VkTrack[]; count?: number; error?: string }>(
+    `/api/vk/playlist?${qs}`,
+  )
+}
+
+export function vkDownload(urls: string[]) {
+  return json<{ ok: boolean; ids?: number[]; count?: number; error?: string }>("/api/vk/download", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ urls }),
+  })
+}
+
+export function musicStreamUrl(pageUrl: string) {
+  return `/api/music/stream?url=${encodeURIComponent(pageUrl)}`
+}
+
+/** Готовит локальный mp3 для превью и возвращает URL для <audio>. */
+export function prepareMusicPreview(pageUrl: string) {
+  return json<{
+    ok: boolean
+    stream?: string
+    title?: string
+    artist?: string
+    cover?: string
+    error?: string
+  }>("/api/music/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: pageUrl }),
+  })
+}

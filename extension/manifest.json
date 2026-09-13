@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "Media App Cookies",
+  "version": "1.0.1",
+  "description": "Отправка cookies YouTube/Instagram/VK в Media App",
+  "permissions": ["cookies", "storage"],
+  "host_permissions": [
+    "*://*.youtube.com/*",
+    "*://*.google.com/*",
+    "*://*.googlevideo.com/*",
+    "*://*.instagram.com/*",
+    "*://*.facebook.com/*",
+    "*://*.vk.com/*",
+    "*://*.vk.ru/*",
+    "*://*.vk.me/*",
+    "*://*.tiktok.com/*",
+    "*://*.yandex.ru/*",
+    "*://*.soundcloud.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "action": {
+    "default_title": "Media App Cookies",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "media-app-cookies@local",
+      "strict_min_version": "109.0"
+    }
+  }
+}

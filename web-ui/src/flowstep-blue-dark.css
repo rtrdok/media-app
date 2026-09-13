@@ -1,0 +1,82 @@
+/**
+ * Media App palette (ui/theme.py + Flowstep blueDark accents).
+ * Navy background, blue primary — not neutral grey zinc.
+ */
+:root,
+html.dark,
+.dark {
+  --radius: 0.75rem;
+
+  --background: 228 52% 6%;
+  --foreground: 210 40% 98%;
+
+  --card: 222 45% 11%;
+  --card-foreground: 210 40% 98%;
+
+  --popover: 222 45% 11%;
+  --popover-foreground: 210 40% 98%;
+
+  --primary: 217 91% 60%;
+  --primary-foreground: 210 40% 98%;
+
+  --secondary: 222 38% 14%;
+  --secondary-foreground: 210 40% 98%;
+
+  --muted: 222 38% 14%;
+  --muted-foreground: 215 16% 63%;
+
+  --accent: 224 76% 48%;
+  --accent-foreground: 210 40% 98%;
+
+  --destructive: 347 77% 50%;
+  --destructive-foreground: 210 40% 98%;
+
+  --border: 217 28% 22%;
+  --input: 220 50% 9%;
+  --ring: 217 91% 60%;
+
+  --sidebar: 221 49% 8%;
+  --sidebar-foreground: 210 40% 98%;
+  --sidebar-primary: 217 91% 60%;
+  --sidebar-primary-foreground: 210 40% 98%;
+  --sidebar-accent: 222 38% 14%;
+  --sidebar-accent-foreground: 210 40% 98%;
+  --sidebar-border: 217 28% 22%;
+  --sidebar-ring: 217 91% 60%;
+
+  --chart-1: 217 91% 60%;
+  --chart-2: 160 60% 45%;
+  --chart-3: 30 80% 55%;
+  --chart-4: 280 65% 60%;
+  --chart-5: 347 77% 50%;
+}
+
+html.light {
+  --background: 210 40% 98%;
+  --foreground: 228 52% 6%;
+  --card: 0 0% 100%;
+  --card-foreground: 228 52% 6%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 228 52% 6%;
+  --primary: 217 91% 53%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 96%;
+  --secondary-foreground: 228 52% 6%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 40%;
+  --accent: 210 40% 96%;
+  --accent-foreground: 228 52% 6%;
+  --destructive: 347 77% 50%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --ring: 217 91% 53%;
+  --sidebar: 210 40% 96%;
+  --sidebar-foreground: 228 52% 6%;
+  --sidebar-primary: 217 91% 53%;
+  --sidebar-primary-foreground: 210 40% 98%;
+  --sidebar-accent: 210 40% 93%;
+  --sidebar-accent-foreground: 228 52% 6%;
+  --sidebar-border: 214 32% 91%;
+  --sidebar-ring: 217 91% 53%;
+}
