@@ -173,55 +173,148 @@ def _fmt_bytes(n: float) -> str:
     return f"{n / (1024 * 1024):.1f} МБ"
 
 
+def _set_job(**kwargs) -> None:
+    with _job_lock:
+        _job.update(kwargs)
+
+
+def _download_headers(url: str) -> dict[str, str]:
+    """Для CDN GitHub — лёгкие заголовки; API-заголовки часто ломают прокси."""
+    ua = f"MediaApp/{APP_VERSION}"
+    if "api.github.com" in (url or ""):
+        return {**_github_headers(), "Accept": "application/octet-stream"}
+    return {
+        "User-Agent": ua,
+        "Accept": "application/octet-stream,*/*",
+    }
+
+
+def _open_download(url: str, *, bypass_proxy: bool, connect_timeout: float = 20.0):
+    """Открывает поток скачивания. bypass_proxy=True игнорирует системный HTTP(S)_PROXY."""
+    import requests
+
+    headers = _download_headers(url)
+    sess = requests.Session()
+    if bypass_proxy:
+        sess.trust_env = False
+        sess.proxies = {"http": None, "https": None}
+    r = sess.get(
+        url,
+        headers=headers,
+        stream=True,
+        timeout=(connect_timeout, 120),
+        allow_redirects=True,
+    )
+    r.raise_for_status()
+    total = int(r.headers.get("Content-Length") or 0)
+
+    def _iter():
+        try:
+            for chunk in r.iter_content(chunk_size=256 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            r.close()
+            sess.close()
+
+    return total, _iter()
+
+
 def _download_file(url: str, dest: Path) -> None:
+    """Скачивает ZIP. Пробует системный прокси и прямое подключение (короткий connect-timeout)."""
     import time
 
-    headers = {
-        **_github_headers(),
-        "Accept": "application/octet-stream",
-    }
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=300) as r, open(dest, "wb") as out:
-        total = int(r.headers.get("Content-Length") or 0)
-        done = 0
-        t0 = time.monotonic()
-        last_t = t0
-        last_done = 0
-        speed = 0.0
-        while True:
-            chunk = r.read(1024 * 256)
-            if not chunk:
-                break
-            out.write(chunk)
-            done += len(chunk)
-            now = time.monotonic()
-            if now - last_t >= 0.35:
-                dt = max(0.001, now - last_t)
-                speed = (done - last_done) / dt
-                last_t = now
-                last_done = done
-            elapsed = max(0.001, now - t0)
-            if speed <= 0:
-                speed = done / elapsed
-            pct = round(100.0 * done / total, 1) if total else 0.0
-            if total:
-                msg = (
-                    f"Скачивание… {pct}% · {_fmt_bytes(done)} / {_fmt_bytes(total)} · "
-                    f"{_fmt_bytes(speed)}/с"
-                )
-            else:
-                msg = f"Скачивание… {_fmt_bytes(done)} · {_fmt_bytes(speed)}/с"
-            with _job_lock:
-                _job["pct"] = pct
-                _job["bytes_done"] = done
-                _job["bytes_total"] = total
-                _job["speed_bps"] = round(speed, 1)
-                _job["message"] = msg
-        with _job_lock:
-            _job["pct"] = 100.0 if total else _job.get("pct", 0)
-            _job["bytes_done"] = done
-            _job["bytes_total"] = total or done
-            _job["message"] = f"Скачано {_fmt_bytes(done)}"
+    last_err: Exception | None = None
+    proxies = {}
+    try:
+        proxies = urllib.request.getproxies() or {}
+    except Exception:
+        proxies = {}
+
+    modes: list[tuple[bool, str]] = []
+    if proxies:
+        # локальный VPN/Clash часто висит на больших файлах — сначала напрямую
+        proxy_vals = " ".join(str(v) for v in proxies.values()).lower()
+        local = "127.0.0.1" in proxy_vals or "localhost" in proxy_vals
+        if local:
+            modes = [
+                (True, "напрямую…"),
+                (False, "через локальный прокси…"),
+            ]
+        else:
+            modes = [
+                (False, "через прокси…"),
+                (True, "напрямую…"),
+            ]
+    else:
+        modes = [(True, "подключение…")]
+
+    for bypass, label in modes:
+        try:
+            _set_job(message=f"Скачивание… {label}", pct=0.0, bytes_done=0, bytes_total=0)
+            log(f"Update download bypass_proxy={bypass} url={url}")
+            total, chunks = _open_download(url, bypass_proxy=bypass, connect_timeout=18.0)
+            _set_job(
+                message=(
+                    f"Скачивание… 0% · 0 Б / {_fmt_bytes(total)}"
+                    if total
+                    else "Скачивание… соединение установлено"
+                ),
+                bytes_total=total,
+            )
+            done = 0
+            t0 = time.monotonic()
+            last_t = t0
+            last_done = 0
+            speed = 0.0
+            with open(dest, "wb") as out:
+                for chunk in chunks:
+                    out.write(chunk)
+                    done += len(chunk)
+                    now = time.monotonic()
+                    if now - last_t >= 0.25:
+                        dt = max(0.001, now - last_t)
+                        speed = (done - last_done) / dt
+                        last_t = now
+                        last_done = done
+                    elapsed = max(0.001, now - t0)
+                    if speed <= 0:
+                        speed = done / elapsed
+                    pct = round(100.0 * done / total, 1) if total else 0.0
+                    if total:
+                        msg = (
+                            f"Скачивание… {pct}% · {_fmt_bytes(done)} / {_fmt_bytes(total)} · "
+                            f"{_fmt_bytes(speed)}/с"
+                        )
+                    else:
+                        msg = f"Скачивание… {_fmt_bytes(done)} · {_fmt_bytes(speed)}/с"
+                    _set_job(
+                        pct=pct,
+                        bytes_done=done,
+                        bytes_total=total,
+                        speed_bps=round(speed, 1),
+                        message=msg,
+                    )
+            _set_job(
+                pct=100.0 if total else (100.0 if done else 0.0),
+                bytes_done=done,
+                bytes_total=total or done,
+                message=f"Скачано {_fmt_bytes(done)}",
+            )
+            return
+        except Exception as e:
+            last_err = e
+            log(f"Update download failed (bypass_proxy={bypass}): {e}")
+            try:
+                if dest.is_file():
+                    dest.unlink()
+            except OSError:
+                pass
+            continue
+
+    raise RuntimeError(
+        f"Не удалось скачать обновление. Проверьте VPN/прокси или скачайте MediaApp.zip вручную. ({last_err})"
+    )
 
 
 def _write_apply_script(zip_path: Path, target: Path, exe_name: str = "MediaApp.exe") -> Path:
@@ -360,21 +453,29 @@ def start_update_job(url: str | None = None) -> dict:
         if _job["status"] in ("downloading", "applying"):
             return {"ok": True, **dict(_job), "message": _job["message"] or "Уже скачивается…"}
 
-    try:
-        info = check_github_update()
-    except Exception as e:
-        return {"ok": False, "status": "error", "message": f"Ошибка проверки: {e}"}
-
-    dl = (url or info.get("url") or "").strip()
-    # Разрешаем скачать даже если версии совпали (переустановка), если есть URL
-    if not info.get("update") and not url:
-        return {
-            **info,
-            "ok": True,
-            "status": "idle",
-            "applied": False,
-            "message": info.get("message") or "Обновление не нужно",
-        }
+    dl = (url or "").strip()
+    info: dict = {
+        "ok": True,
+        "current": APP_VERSION,
+        "remote": "",
+        "update": bool(dl),
+        "url": dl,
+        "message": "",
+    }
+    if not dl:
+        try:
+            info = check_github_update()
+        except Exception as e:
+            return {"ok": False, "status": "error", "message": f"Ошибка проверки: {e}"}
+        dl = (info.get("url") or "").strip()
+        if not info.get("update"):
+            return {
+                **info,
+                "ok": True,
+                "status": "idle",
+                "applied": False,
+                "message": info.get("message") or "Обновление не нужно",
+            }
     if not dl:
         return {
             **info,

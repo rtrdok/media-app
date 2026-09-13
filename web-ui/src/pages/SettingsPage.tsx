@@ -138,6 +138,14 @@ export function SettingsPage() {
             /* ignore transient */
           })
       }, 400)
+      // если долго 0% — не крутить «Подключение» вечно без статуса
+      window.setTimeout(() => {
+        void updateStatus().then((s) => {
+          if (s.status === "downloading" && !(s.pct && s.pct > 0) && s.message) {
+            setUpdMsg(s.message)
+          }
+        })
+      }, 20000)
     } catch (e) {
       setUpdOk(false)
       setUpdMsg(e instanceof Error ? e.message : String(e))
@@ -349,7 +357,12 @@ export function SettingsPage() {
                         />
                       </div>
                       <p className="text-muted-foreground mt-1 text-xs tabular-nums">
-                        {updPct > 0 ? `${updPct}%` : "Подключение…"}
+                        {updPct > 0
+                          ? `${updPct}%`
+                          : updMsg.toLowerCase().includes("прокси") ||
+                              updMsg.toLowerCase().includes("напрямую")
+                            ? "Подключение (если долго — проверьте VPN)…"
+                            : "Подключение…"}
                       </p>
                     </div>
                   ) : null}
