@@ -41,6 +41,10 @@ def main() -> int:
         run([py, "-m", "PyInstaller", "--noconfirm", "MediaApp.spec"])
     if ICON.is_file():
         shutil.copy2(ICON, INSTALLER_DIR / "app.ico")
+    for name in ("app.png", "app-64.png"):
+        src = ROOT / "branding" / name
+        if src.is_file():
+            shutil.copy2(src, INSTALLER_DIR / name)
     zip_app()
     run(
         [

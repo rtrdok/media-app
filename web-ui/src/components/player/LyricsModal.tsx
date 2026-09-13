@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { AppModal } from "@/components/ui/AppModal"
-import { Button } from "@/components/ui/button"
+import { X } from "lucide-react"
 import { fetchLyrics } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
@@ -12,6 +11,8 @@ type Props = {
   duration?: number
   onSeek?: (sec: number) => void
   onClose: () => void
+  /** true = панель в основной зоне UI; false = компактный оверлей */
+  docked?: boolean
 }
 
 type LyricLine = { t: number; text: string }
@@ -40,7 +41,7 @@ function parseLrc(raw: string): LyricLine[] | null {
   return lines
 }
 
-export function LyricsModal({
+export function LyricsPanel({
   open,
   title,
   artist,
@@ -48,12 +49,12 @@ export function LyricsModal({
   duration,
   onSeek,
   onClose,
+  docked = true,
 }: Props) {
   const [raw, setRaw] = useState("")
   const [syncedFlag, setSyncedFlag] = useState(false)
   const [msg, setMsg] = useState("Загрузка…")
   const [busy, setBusy] = useState(false)
-  const listRef = useRef<HTMLDivElement | null>(null)
   const activeRef = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => {
@@ -92,54 +93,69 @@ export function LyricsModal({
     activeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
   }, [activeIdx, open, synced])
 
+  if (!open) return null
+
   return (
-    <AppModal
-      open={open}
-      title="Текст песни"
-      description={artist ? `${title} — ${artist}` : title}
-      onClose={onClose}
-      className="max-w-xl"
-      footer={
-        <Button variant="ghost" onClick={onClose}>
-          Закрыть
-        </Button>
-      }
-    >
-      {busy || msg ? (
-        <p className="text-muted-foreground text-sm">{msg || "Загрузка…"}</p>
-      ) : synced && lines ? (
-        <div
-          ref={listRef}
-          className="max-h-[min(60vh,520px)] space-y-1 overflow-y-auto px-1 py-6"
-        >
-          {lines.map((line, i) => {
-            const active = i === activeIdx
-            const near = Math.abs(i - activeIdx) <= 1
-            return (
-              <button
-                key={`${line.t}-${i}`}
-                type="button"
-                ref={active ? activeRef : undefined}
-                onClick={() => onSeek?.(line.t)}
-                className={cn(
-                  "block w-full rounded-lg px-3 py-2 text-left transition-all duration-300",
-                  active
-                    ? "text-foreground scale-[1.02] text-lg font-semibold tracking-tight"
-                    : near
-                      ? "text-muted-foreground text-base"
-                      : "text-muted-foreground/45 text-sm",
-                )}
-              >
-                {line.text}
-              </button>
-            )
-          })}
-        </div>
-      ) : (
-        <pre className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap font-sans text-sm leading-relaxed">
-          {raw}
-        </pre>
+    <div
+      className={cn(
+        "bg-background/95 flex flex-col backdrop-blur-sm",
+        docked
+          ? "absolute inset-0 z-20"
+          : "border-border fixed top-16 right-0 bottom-24 left-[232px] z-30 border-t",
       )}
-    </AppModal>
+    >
+      <div className="border-border flex shrink-0 items-start justify-between gap-4 border-b px-8 py-5">
+        <div className="min-w-0">
+          <p className="text-muted-foreground text-xs tracking-wide uppercase">Текст песни</p>
+          <h2 className="mt-1 truncate text-xl font-semibold tracking-tight">{title || "—"}</h2>
+          {artist ? <p className="text-muted-foreground mt-0.5 truncate text-sm">{artist}</p> : null}
+        </div>
+        <button
+          type="button"
+          aria-label="Закрыть текст"
+          onClick={onClose}
+          className="text-muted-foreground hover:text-foreground flex size-9 shrink-0 items-center justify-center rounded-lg"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-8 py-8">
+        {busy || msg ? (
+          <p className="text-muted-foreground text-sm">{msg || "Загрузка…"}</p>
+        ) : synced && lines ? (
+          <div className="mx-auto max-w-2xl space-y-1">
+            {lines.map((line, i) => {
+              const active = i === activeIdx
+              const near = Math.abs(i - activeIdx) <= 1
+              return (
+                <button
+                  key={`${line.t}-${i}`}
+                  type="button"
+                  ref={active ? activeRef : undefined}
+                  onClick={() => onSeek?.(line.t)}
+                  className={cn(
+                    "block w-full rounded-lg px-3 py-2.5 text-left transition-all duration-300",
+                    active
+                      ? "text-foreground scale-[1.02] text-2xl font-semibold tracking-tight"
+                      : near
+                        ? "text-muted-foreground text-lg"
+                        : "text-muted-foreground/40 text-base",
+                  )}
+                >
+                  {line.text}
+                </button>
+              )
+            })}
+          </div>
+        ) : (
+          <pre className="mx-auto max-w-2xl whitespace-pre-wrap font-sans text-sm leading-relaxed">
+            {raw}
+          </pre>
+        )}
+      </div>
+    </div>
   )
 }
+
+/** @deprecated имя для совместимости */
+export const LyricsModal = LyricsPanel

@@ -10,7 +10,7 @@ a = Analysis(
     ["setup_main.py"],
     pathex=[],
     binaries=[],
-    datas=[("payload.zip", "."), ("app.ico", ".")],
+    datas=[("payload.zip", "."), ("app.ico", "."), ("app.png", "."), ("app-64.png", ".")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

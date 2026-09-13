@@ -34,7 +34,8 @@ const NAV: { id: PageId; icon: typeof Home }[] = [
 type PanelId = "notify" | "pc" | null
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { page, setPage, state, focusHistorySearch, notifyDot, player, refresh } = useApp()
+  const { page, setPage, state, focusHistorySearch, notifyDot, player, refresh, miniPlayer } =
+    useApp()
   const playerVisible = Boolean(player?.src)
   const videoPlaying =
     playerVisible && (player?.kind === "video" || (player?.src ? isVideoSrc(player.src) : false))
@@ -113,12 +114,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       onDragLeave={() => setDragOver(false)}
       onDrop={onDrop}
     >
-      {dragOver ? (
+      {dragOver && !miniPlayer ? (
         <div className="border-primary bg-primary/10 pointer-events-none absolute inset-0 z-50 flex items-center justify-center border-2 border-dashed">
           <p className="text-foreground text-sm font-medium">Отпустите ссылку или файл</p>
         </div>
       ) : null}
-      <aside className="bg-sidebar border-border fixed z-30 top-0 bottom-0 left-0 flex w-[232px] flex-col border-r pt-5 pr-4 pb-5 pl-4">
+
+      {/* В мини-режиме скрываем оболочку — остаётся только плеер (аудио не размонтируется). */}
+      <aside
+        className={cn(
+          "bg-sidebar border-border fixed z-30 top-0 bottom-0 left-0 flex w-[232px] flex-col border-r pt-5 pr-4 pb-5 pl-4",
+          miniPlayer && "hidden",
+        )}
+      >
         <div className="flex items-center gap-3 pr-3 pb-8 pl-3">
           <div className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-xl shadow-sm">
             <Clapperboard className="size-5 stroke-[2]" />
@@ -151,7 +159,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <div className="ml-[232px] flex min-h-0 min-w-0 flex-1 flex-col">
+      <div
+        className={cn(
+          "ml-[232px] flex min-h-0 min-w-0 flex-1 flex-col",
+          miniPlayer && "ml-0 hidden",
+        )}
+      >
         <header className="bg-background border-border relative z-40 flex h-16 shrink-0 items-center justify-between border-b pr-8 pl-8">
           <div className="text-muted-foreground flex items-center gap-2 text-sm">
             <span>Media App</span>
@@ -328,14 +341,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <div
           className={cn(
-            "min-h-0 flex-1 overflow-y-auto",
+            "relative min-h-0 flex-1 overflow-y-auto",
             playerVisible && (videoPlaying ? VIDEO_PLAYER_DOCK_PAD : "pb-24"),
           )}
         >
           {children}
         </div>
-        <PlayerBar showOnSettings />
       </div>
+      {/* PlayerBar всегда смонтирован — при мини просто меняет раскладку */}
+      <PlayerBar showOnSettings />
     </div>
   )
 }

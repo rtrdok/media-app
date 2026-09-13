@@ -259,30 +259,50 @@ def main() -> None:
 
         set_on_top_callback(_set_on_top)
 
-        _mini_win: dict = {"win": None}
+        _geom_saved: dict = {}
 
         def _apply_mini_player(enable: bool) -> bool:
-            """show/hide только из GUI-потока (js_api), иначе WinForms зависает."""
+            """Сжимает главное окно в мини-режим (без второго WebView — он зависал)."""
             from media_core.player_bridge import set_mini_open
 
-            win = _mini_win.get("win")
+            win = _window
             if win is None:
                 set_mini_open(False)
                 return False
             try:
                 if enable:
-                    win.show()
                     try:
-                        win.on_top = True
+                        _geom_saved["box"] = (win.width, win.height, win.x, win.y)
+                    except Exception:
+                        _geom_saved["box"] = (1180, 780, None, None)
+                    # длиннее и чуть ниже — название трека + громкость
+                    win.resize(620, 78)
+                    try:
+                        # правый нижний угол экрана
+                        import ctypes
+
+                        user32 = ctypes.windll.user32
+                        sw = int(user32.GetSystemMetrics(0))
+                        sh = int(user32.GetSystemMetrics(1))
+                        win.move(max(0, sw - 640), max(0, sh - 140))
                     except Exception:
                         pass
+                    win.on_top = True
                     set_mini_open(True)
                 else:
-                    win.hide()
+                    box = _geom_saved.get("box") or (1180, 780, None, None)
+                    w, h, x, y = box
+                    win.on_top = False
+                    win.resize(max(800, int(w or 1180)), max(560, int(h or 780)))
+                    if x is not None and y is not None:
+                        try:
+                            win.move(int(x), int(y))
+                        except Exception:
+                            pass
                     set_mini_open(False)
                 return True
             except Exception:
-                log.exception("mini player show/hide failed")
+                log.exception("mini player resize failed")
                 set_mini_open(False)
                 return False
 
@@ -294,8 +314,6 @@ def main() -> None:
                 return {"ok": _apply_mini_player(False)}
 
         def _set_mini_player(enable: bool):
-            # HTTP fallback: не трогаем HWND из uvicorn-потока — только флаг.
-            # Реальное окно открывает фронт через pywebview.api.apply_mini_player.
             from media_core.player_bridge import set_mini_want
 
             set_mini_want(bool(enable))
@@ -315,47 +333,13 @@ def main() -> None:
             f"http://{HOST}:{PORT}/",
             width=1180,
             height=780,
-            min_size=(1040, 680),
+            min_size=(520, 72),
             background_color="#0B1020",
             frameless=False,
             easy_drag=False,
             js_api=gui_api,
         )
         _window = window
-
-        mini = webview.create_window(
-            "Media App",
-            f"http://{HOST}:{PORT}/mini",
-            width=440,
-            height=78,
-            on_top=True,
-            frameless=True,
-            easy_drag=True,
-            background_color="#0f172a",
-            resizable=False,
-            hidden=True,
-            js_api=gui_api,
-        )
-        _mini_win["win"] = mini
-
-        def on_mini_closing():
-            from media_core.player_bridge import push_command, set_mini_open
-
-            set_mini_open(False)
-            try:
-                push_command("close_mini")
-            except Exception:
-                pass
-            try:
-                mini.hide()
-            except Exception:
-                pass
-            return False
-
-        try:
-            mini.events.closing += on_mini_closing
-        except Exception:
-            pass
 
         def on_closing():
             if _exit_requested:
@@ -374,16 +358,6 @@ def main() -> None:
             pass
 
         def on_closed():
-            try:
-                mw = _mini_win.get("win")
-                _mini_win["win"] = None
-                if mw is not None:
-                    try:
-                        mw.destroy()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
             try:
                 from web.server import request_app_shutdown
 

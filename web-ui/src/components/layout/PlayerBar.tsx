@@ -16,15 +16,10 @@ import {
 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { AddToPlaylistsModal } from "@/components/library/AddToPlaylistsModal"
-import { LyricsModal } from "@/components/player/LyricsModal"
+import { LyricsPanel } from "@/components/player/LyricsModal"
 import { PlayerQueuePanel } from "@/components/player/PlayerQueuePanel"
 import { useApp } from "@/context/AppProvider"
-import {
-  fetchPlayerCommands,
-  publishPlayerState,
-  applyMiniPlayerWindow,
-  setWindowFullscreen,
-} from "@/lib/api"
+import { applyMiniPlayerWindow, setWindowFullscreen } from "@/lib/api"
 import { filePathFromPlayerSrc, isVideoSrc } from "@/lib/media"
 import { cn } from "@/lib/utils"
 
@@ -63,11 +58,8 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   const [addPlOpen, setAddPlOpen] = useState(false)
   const [queueOpen, setQueueOpen] = useState(false)
   const [lyricsOpen, setLyricsOpen] = useState(false)
+  const [narrow, setNarrow] = useState(false)
   const hideTimer = useRef(0)
-  const volumeRef = useRef(volume)
-  volumeRef.current = volume
-  const playingRef = useRef(playing)
-  playingRef.current = playing
 
   const hidden = page === "settings" && !showOnSettings
   const hasSrc = Boolean(player?.src)
@@ -128,6 +120,13 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   }, [hasSrc])
 
   useEffect(() => {
+    const check = () => setNarrow(window.innerWidth < 1180)
+    check()
+    window.addEventListener("resize", check)
+    return () => window.removeEventListener("resize", check)
+  }, [])
+
+  useEffect(() => {
     if (!theater) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") void applyFullscreen(false)
@@ -142,6 +141,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
       const t = e.target as HTMLElement | null
       const tag = t?.tagName
       if (tag === "INPUT" || tag === "TEXTAREA" || t?.isContentEditable) return
+      if (miniPlayer) return
       if (e.code === "Space") {
         e.preventDefault()
         setPlaying((p) => !p)
@@ -158,14 +158,14 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         e.preventDefault()
         setVolume((v) => Math.max(0, Math.round((v - 0.05) * 100) / 100))
       } else if (e.key.toLowerCase() === "l" && !e.ctrlKey && !e.metaKey) {
-        setLyricsOpen(true)
+        setLyricsOpen((v) => !v)
       } else if (e.key.toLowerCase() === "q" && !e.ctrlKey && !e.metaKey) {
         setQueueOpen((v) => !v)
       }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [playNextInQueue, playPrevInQueue, setPlaying])
+  }, [playNextInQueue, playPrevInQueue, setPlaying, miniPlayer])
 
   useEffect(() => {
     if (!isVideo) {
@@ -191,63 +191,16 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     }
   }, [isVideo, playing, player?.src, theater])
 
-  // Синхронизация с отдельным окном мини-плеера
-  useEffect(() => {
-    if (!hasSrc) return
-    const publish = () => {
-      const el = mediaRef.current
-      void publishPlayerState({
-        title: player?.title || "",
-        artist: player?.artist || "",
-        playing: playingRef.current,
-        current: el?.currentTime ?? 0,
-        duration: el?.duration && Number.isFinite(el.duration) ? el.duration : 0,
-        volume: volumeRef.current,
-        has_track: true,
-      })
-    }
-    publish()
-    const id = window.setInterval(publish, 700)
-    return () => window.clearInterval(id)
-  }, [hasSrc, player?.title, player?.artist, playing, volume])
-
-  useEffect(() => {
-    if (!hasSrc) return
-    const id = window.setInterval(() => {
-      void fetchPlayerCommands()
-        .then((j) => {
-          const cmds = j.commands || []
-          for (const c of cmds) {
-            if (c.action === "toggle") setPlaying((p) => !p)
-            else if (c.action === "play") setPlaying(true)
-            else if (c.action === "pause") setPlaying(false)
-            else if (c.action === "next") playNextInQueue()
-            else if (c.action === "prev") playPrevInQueue()
-            else if (c.action === "volume" && typeof c.value === "number") {
-              setVolume(Math.min(1, Math.max(0, c.value)))
-            } else if (c.action === "seek" && typeof c.value === "number") {
-              const el = mediaRef.current
-              if (el && Number.isFinite(c.value)) {
-                el.currentTime = c.value
-                setCurrentSec(c.value)
-                setCurrent(fmt(c.value))
-              }
-            } else if (c.action === "close_mini") {
-              setMiniPlayer(false)
-            }
-          }
-        })
-        .catch(() => {})
-    }, 400)
-    return () => window.clearInterval(id)
-  }, [hasSrc, playNextInQueue, playPrevInQueue, setPlaying, setMiniPlayer])
-
   useEffect(() => {
     if (!hasSrc && miniPlayer) {
       setMiniPlayer(false)
       void applyMiniPlayerWindow(false)
     }
   }, [hasSrc, miniPlayer, setMiniPlayer])
+
+  useEffect(() => {
+    if (miniPlayer) setLyricsOpen(false)
+  }, [miniPlayer])
 
   const onTime = () => {
     if (seeking) return
@@ -299,9 +252,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     setMiniPlayer(next)
     try {
       const res = await applyMiniPlayerWindow(next)
-      if (next && !res.ok) {
-        setMiniPlayer(false)
-      }
+      if (next && !res.ok) setMiniPlayer(false)
     } catch {
       setMiniPlayer(false)
     }
@@ -310,33 +261,106 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   if (hidden || !hasSrc) return null
 
   const trackPath = player?.path || (player?.src ? filePathFromPlayerSrc(player.src) : "")
-
   const RepeatIcon = repeat === "one" ? Repeat1 : Repeat
+
+  // Один audio на все режимы — иначе при мини remount останавливает трек
+  const audioEl =
+    !isVideo && player?.src ? (
+      <audio
+        ref={mediaRef as React.RefObject<HTMLAudioElement>}
+        src={player.src}
+        onTimeUpdate={onTime}
+        onEnded={onEnded}
+        className="pointer-events-none absolute h-0 w-0 opacity-0"
+      />
+    ) : null
+
+  const miniChrome =
+    miniPlayer && !isVideo ? (
+      <div className="bg-card border-border fixed inset-0 z-[100] flex h-full items-center gap-3 border-0 px-3">
+        <button
+          type="button"
+          aria-label="Предыдущий"
+          disabled={!canPrev}
+          onClick={() => playPrevInQueue()}
+          className={cn(
+            "flex size-8 items-center justify-center rounded-lg",
+            canPrev ? "text-foreground/80 hover:text-foreground" : "text-muted-foreground/40",
+          )}
+        >
+          <SkipBack className="size-4" />
+        </button>
+        <button
+          type="button"
+          aria-label={playing ? "Пауза" : "Воспроизведение"}
+          onClick={() => setPlaying(!playing)}
+          className="bg-primary text-primary-foreground flex size-9 shrink-0 items-center justify-center rounded-full"
+        >
+          {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+        </button>
+        <button
+          type="button"
+          aria-label="Следующий"
+          disabled={!canNext}
+          onClick={() => playNextInQueue()}
+          className={cn(
+            "flex size-8 items-center justify-center rounded-lg",
+            canNext ? "text-foreground/80 hover:text-foreground" : "text-muted-foreground/40",
+          )}
+        >
+          <SkipForward className="size-4" />
+        </button>
+        <div className="min-w-0 flex-1 px-1">
+          <p className="truncate text-sm font-semibold">{player?.title ?? "—"}</p>
+          <p className="text-muted-foreground truncate text-xs">{player?.artist ?? ""}</p>
+        </div>
+        <Volume2 className="text-muted-foreground size-3.5 shrink-0" aria-hidden />
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={volume}
+          onChange={(e) => setVolume(Number(e.target.value))}
+          className="accent-primary h-1.5 w-24 shrink-0 cursor-pointer"
+          aria-label="Громкость"
+        />
+        <button
+          type="button"
+          title="Вернуть в приложение"
+          onClick={() => void toggleMiniPlayer()}
+          className="text-primary flex size-8 items-center justify-center rounded-lg"
+        >
+          <PictureInPicture2 className="size-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="Закрыть"
+          onClick={onClose}
+          className="text-muted-foreground hover:text-foreground flex size-8 items-center justify-center rounded-lg"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+    ) : null
 
   const controls = (
     <div
       className={cn(
-        "bg-card/95 border-border flex h-[72px] shrink-0 items-center gap-3 border-t pr-4 pl-4 backdrop-blur-sm transition-opacity duration-300 sm:gap-4 sm:pr-6 sm:pl-6",
+        "bg-card/95 border-border flex h-[72px] shrink-0 items-center gap-2 border-t px-3 backdrop-blur-sm transition-opacity duration-300 sm:gap-3 sm:px-5",
         !isVideo && "fixed z-40 right-0 bottom-0 left-[232px]",
         isVideo && !uiVisible && "pointer-events-none opacity-0",
+        miniPlayer && "hidden",
       )}
     >
-      {!isVideo && player?.src ? (
-        <audio
-          ref={mediaRef as React.RefObject<HTMLAudioElement>}
-          src={player.src}
-          onTimeUpdate={onTime}
-          onEnded={onEnded}
-        />
-      ) : null}
-      <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+      <div className="flex shrink-0 items-center gap-0.5">
         <button
           type="button"
           aria-label="Предыдущий трек"
           disabled={!canPrev}
           onClick={() => playPrevInQueue()}
           className={cn(
-            "flex size-9 items-center justify-center rounded-lg",
+            "flex size-8 items-center justify-center rounded-lg sm:size-9",
             canPrev ? "text-muted-foreground hover:text-foreground" : "text-muted-foreground/40",
           )}
         >
@@ -346,7 +370,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
           type="button"
           aria-label={playing ? "Пауза" : "Воспроизведение"}
           onClick={() => setPlaying(!playing)}
-          className="bg-primary text-primary-foreground flex size-10 items-center justify-center rounded-full"
+          className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-full sm:size-10"
         >
           {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
         </button>
@@ -356,23 +380,22 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
           disabled={!canNext}
           onClick={() => playNextInQueue()}
           className={cn(
-            "flex size-9 items-center justify-center rounded-lg",
+            "flex size-8 items-center justify-center rounded-lg sm:size-9",
             canNext ? "text-muted-foreground hover:text-foreground" : "text-muted-foreground/40",
           )}
         >
           <SkipForward className="size-4" />
         </button>
       </div>
-      <div className="w-28 min-w-0 shrink-0 sm:w-44">
+      <div className={cn("min-w-0 shrink", narrow ? "w-24" : "w-36 sm:w-44")}>
         <p className="truncate text-sm font-medium">{player?.title ?? "—"}</p>
         <p className="text-muted-foreground truncate text-xs">
           {player?.artist ?? ""}
           {isVideo ? " · Видео" : ""}
-          {queueMeta.length > 1 ? ` · ${queueMeta.index + 1}/${queueMeta.length}` : ""}
         </p>
       </div>
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <span className="text-muted-foreground w-9 shrink-0 text-xs tabular-nums">{current}</span>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <span className="text-muted-foreground w-8 shrink-0 text-xs tabular-nums">{current}</span>
         <input
           type="range"
           min={0}
@@ -380,7 +403,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
           step={0.001}
           value={Number.isFinite(progress) ? progress : 0}
           aria-label="Позиция воспроизведения"
-          className="accent-primary h-1.5 min-w-[80px] flex-1 cursor-pointer"
+          className="accent-primary h-1.5 min-w-0 flex-1 cursor-pointer"
           onChange={(e) => {
             setSeeking(true)
             seekTo(Number(e.target.value))
@@ -388,10 +411,10 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
           onMouseUp={() => setSeeking(false)}
           onTouchEnd={() => setSeeking(false)}
         />
-        <span className="text-muted-foreground w-9 shrink-0 text-right text-xs tabular-nums">{total}</span>
+        <span className="text-muted-foreground w-8 shrink-0 text-right text-xs tabular-nums">{total}</span>
       </div>
-      <div className="relative flex shrink-0 items-center gap-0.5 sm:gap-1">
-        <Volume2 className="text-muted-foreground size-4 shrink-0" aria-hidden />
+      <div className="relative flex shrink-0 items-center gap-0.5">
+        <Volume2 className="text-muted-foreground hidden size-4 shrink-0 sm:block" aria-hidden />
         <input
           type="range"
           min={0}
@@ -399,7 +422,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
           step={0.05}
           value={volume}
           onChange={(e) => setVolume(Number(e.target.value))}
-          className="accent-primary h-1.5 w-16 cursor-pointer sm:w-24"
+          className={cn("accent-primary h-1.5 cursor-pointer", narrow ? "w-12" : "w-16 sm:w-20")}
           aria-label="Уровень громкости"
         />
         {isVideo ? (
@@ -407,56 +430,60 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
             type="button"
             aria-label={theater ? "Выйти из полного экрана" : "На весь экран"}
             onClick={() => void applyFullscreen(!theater)}
-            className="text-muted-foreground hover:text-foreground flex size-9 items-center justify-center rounded-lg"
+            className="text-muted-foreground hover:text-foreground flex size-8 items-center justify-center rounded-lg sm:size-9"
           >
             {theater ? <Minimize className="size-4" /> : <Maximize className="size-4" />}
           </button>
         ) : null}
-        <button
-          type="button"
-          title={
-            repeat === "off"
-              ? "Повтор выкл."
-              : repeat === "all"
-                ? "Повтор очереди"
-                : "Повтор трека"
-          }
-          onClick={() => cycleRepeat()}
-          className={cn(
-            "flex size-9 items-center justify-center rounded-lg",
-            repeat !== "off" ? "text-primary" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <RepeatIcon className="size-4" />
-        </button>
-        <button
-          type="button"
-          title={shuffle ? "Перемешивание вкл." : "Вперемешку"}
-          onClick={() => setShuffle((v) => !v)}
-          className={cn(
-            "flex size-9 items-center justify-center rounded-lg",
-            shuffle ? "text-primary" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <Shuffle className="size-4" />
-        </button>
-        <button
-          type="button"
-          title="Очередь (Q)"
-          onClick={() => setQueueOpen((v) => !v)}
-          className={cn(
-            "flex size-9 items-center justify-center rounded-lg",
-            queueOpen ? "text-primary" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <ListMusic className="size-4" />
-        </button>
+        {!narrow ? (
+          <>
+            <button
+              type="button"
+              title={
+                repeat === "off"
+                  ? "Повтор выкл."
+                  : repeat === "all"
+                    ? "Повтор очереди"
+                    : "Повтор трека"
+              }
+              onClick={() => cycleRepeat()}
+              className={cn(
+                "flex size-8 items-center justify-center rounded-lg sm:size-9",
+                repeat !== "off" ? "text-primary" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <RepeatIcon className="size-4" />
+            </button>
+            <button
+              type="button"
+              title={shuffle ? "Перемешивание вкл." : "Вперемешку"}
+              onClick={() => setShuffle((v) => !v)}
+              className={cn(
+                "flex size-8 items-center justify-center rounded-lg sm:size-9",
+                shuffle ? "text-primary" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Shuffle className="size-4" />
+            </button>
+            <button
+              type="button"
+              title="Очередь (Q)"
+              onClick={() => setQueueOpen((v) => !v)}
+              className={cn(
+                "flex size-8 items-center justify-center rounded-lg sm:size-9",
+                queueOpen ? "text-primary" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <ListMusic className="size-4" />
+            </button>
+          </>
+        ) : null}
         <button
           type="button"
           title="Текст песни (L)"
-          onClick={() => setLyricsOpen(true)}
+          onClick={() => setLyricsOpen((v) => !v)}
           className={cn(
-            "flex size-9 items-center justify-center rounded-lg",
+            "flex size-8 items-center justify-center rounded-lg sm:size-9",
             lyricsOpen ? "text-primary" : "text-muted-foreground hover:text-foreground",
           )}
         >
@@ -464,29 +491,28 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         </button>
         <button
           type="button"
-          title={miniPlayer ? "Закрыть мини-плеер" : "Мини-плеер (отдельное окно)"}
+          title="Мини-плеер"
           onClick={() => void toggleMiniPlayer()}
-          className={cn(
-            "flex size-9 items-center justify-center rounded-lg",
-            miniPlayer ? "text-primary" : "text-muted-foreground hover:text-foreground",
-          )}
+          className="text-muted-foreground hover:text-foreground flex size-8 items-center justify-center rounded-lg sm:size-9"
         >
           <PictureInPicture2 className="size-4" />
         </button>
-        <button
-          type="button"
-          title="В плейлист"
-          disabled={!trackPath}
-          onClick={() => setAddPlOpen(true)}
-          className="text-muted-foreground hover:text-foreground flex size-9 items-center justify-center rounded-lg disabled:opacity-40"
-        >
-          <span className="text-xs font-bold">+</span>
-        </button>
+        {!narrow ? (
+          <button
+            type="button"
+            title="В плейлист"
+            disabled={!trackPath}
+            onClick={() => setAddPlOpen(true)}
+            className="text-muted-foreground hover:text-foreground flex size-8 items-center justify-center rounded-lg disabled:opacity-40 sm:size-9"
+          >
+            <span className="text-xs font-bold">+</span>
+          </button>
+        ) : null}
         <button
           type="button"
           aria-label="Закрыть плеер"
           onClick={onClose}
-          className="text-muted-foreground hover:text-foreground flex size-9 items-center justify-center rounded-lg"
+          className="text-muted-foreground hover:text-foreground flex size-8 items-center justify-center rounded-lg sm:size-9"
         >
           <X className="size-4" />
         </button>
@@ -503,7 +529,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         trackTitle={player?.title}
         onClose={() => setAddPlOpen(false)}
       />
-      <LyricsModal
+      <LyricsPanel
         open={lyricsOpen}
         title={player?.title || ""}
         artist={player?.artist || ""}
@@ -511,6 +537,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         duration={durationSec || undefined}
         onSeek={seekToSec}
         onClose={() => setLyricsOpen(false)}
+        docked={false}
       />
     </>
   )
@@ -518,6 +545,8 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   if (!isVideo)
     return (
       <>
+        {audioEl}
+        {miniChrome}
         {controls}
         {extras}
       </>
@@ -525,6 +554,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
 
   return (
     <>
+      {audioEl}
       <div
         ref={shellRef}
         className={cn(

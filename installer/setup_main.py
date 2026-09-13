@@ -1,4 +1,4 @@
-"""Графический установщик Media App → %LOCALAPPDATA%\\MediaApp."""
+"""Графический установщик Media App → выбор папки, ярлыки."""
 
 from __future__ import annotations
 
@@ -9,10 +9,11 @@ import sys
 import threading
 import zipfile
 from pathlib import Path
+from tkinter import filedialog
 
 APP_NAME = "Media App"
-APP_VERSION = "1.4.3"
-TARGET = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "MediaApp"
+APP_VERSION = "1.4.4"
+DEFAULT_TARGET = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "MediaApp"
 START_MENU = (
     Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
     / "Microsoft"
@@ -37,7 +38,6 @@ def _icon_path() -> Path | None:
     for p in (
         _bundle_dir() / "app.ico",
         Path(__file__).resolve().parent.parent / "branding" / "app.ico",
-        TARGET / "MediaApp.exe",
     ):
         if p.is_file():
             return p
@@ -50,7 +50,10 @@ def _create_shortcut(lnk: Path, target: Path, workdir: Path, args: str = "") -> 
     w = str(workdir).replace("'", "''")
     l = str(lnk).replace("'", "''")
     icon = str(target).replace("'", "''")
-    if target.suffix.lower() == ".exe":
+    branding_ico = workdir / "branding" / "app.ico"
+    if branding_ico.is_file():
+        icon = str(branding_ico).replace("'", "''")
+    elif target.suffix.lower() == ".exe":
         icon = f"{icon},0"
     ps = (
         "$ws = New-Object -ComObject WScript.Shell; "
@@ -72,8 +75,8 @@ def _create_shortcut(lnk: Path, target: Path, workdir: Path, args: str = "") -> 
     )
 
 
-def _write_uninstall(exe: Path) -> Path:
-    bat = TARGET / "Uninstall.bat"
+def _write_uninstall(target: Path) -> Path:
+    bat = target / "Uninstall.bat"
     content = f"""@echo off
 echo Removing {APP_NAME}...
 powershell -NoProfile -Command "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'MediaApp' -ErrorAction SilentlyContinue"
@@ -82,7 +85,7 @@ del /f /q "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Uninstall {APP_N
 del /f /q "%USERPROFILE%\\Desktop\\{APP_NAME}.lnk" 2>nul
 cd /d "%TEMP%"
 timeout /t 1 /nobreak >nul
-rmdir /s /q "{TARGET}"
+rmdir /s /q "{target}"
 echo Done.
 pause
 """
@@ -90,7 +93,6 @@ pause
     return bat
 
 
-# в installer: при обновлении сохраняем пользовательские данные рядом с exe (legacy)
 _PRESERVE = (
     ".env",
     "cookies.txt",
@@ -144,13 +146,13 @@ def _restore_userdata(backup: Path | None, target: Path) -> None:
     shutil.rmtree(backup, ignore_errors=True)
 
 
-def _do_install(desktop: bool, status) -> tuple[bool, str]:
+def _do_install(target: Path, desktop: bool, status) -> tuple[bool, str]:
     zpath = _payload_zip()
     if not zpath.is_file():
         return False, f"Не найден payload.zip:\n{zpath}"
 
     status("Распаковка…")
-    staging = TARGET.parent / "MediaApp_install_tmp"
+    staging = target.parent / "MediaApp_install_tmp"
     if staging.exists():
         shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True, exist_ok=True)
@@ -166,38 +168,40 @@ def _do_install(desktop: bool, status) -> tuple[bool, str]:
             src = nested
 
         status("Копирование файлов…")
-        if TARGET.exists():
-            userdata_bak = _backup_userdata(TARGET)
-            shutil.rmtree(TARGET, ignore_errors=True)
-        shutil.move(str(src), str(TARGET))
-        _restore_userdata(userdata_bak, TARGET)
+        if target.exists():
+            userdata_bak = _backup_userdata(target)
+            shutil.rmtree(target, ignore_errors=True)
+        shutil.move(str(src), str(target))
+        _restore_userdata(userdata_bak, target)
         userdata_bak = None
     except Exception as e:
         if userdata_bak:
             try:
-                _restore_userdata(userdata_bak, TARGET)
+                _restore_userdata(userdata_bak, target)
             except Exception:
                 pass
         return False, f"Ошибка установки:\n{e}"
     finally:
-        if staging.exists() and staging != TARGET:
+        if staging.exists() and staging != target:
             shutil.rmtree(staging, ignore_errors=True)
 
-    exe = TARGET / "MediaApp.exe"
+    exe = target / "MediaApp.exe"
     if not exe.is_file():
-        return False, f"Не найден MediaApp.exe в\n{TARGET}"
+        return False, f"Не найден MediaApp.exe в\n{target}"
 
-    # рядом с exe кладём иконку для ярлыков/трея (на случай)
     ico = _bundle_dir() / "app.ico"
     if ico.is_file():
-        branding = TARGET / "branding"
+        branding = target / "branding"
         branding.mkdir(exist_ok=True)
         try:
             shutil.copy2(ico, branding / "app.ico")
+            for name in ("app.png", "app-64.png"):
+                src_png = _bundle_dir() / name
+                if src_png.is_file():
+                    shutil.copy2(src_png, branding / name)
         except OSError:
             pass
 
-# после распаковки installer тоже снимаем MOTW
     status("Ярлыки…")
     try:
         subprocess.run(
@@ -205,7 +209,7 @@ def _do_install(desktop: bool, status) -> tuple[bool, str]:
                 "powershell",
                 "-NoProfile",
                 "-Command",
-                f"Get-ChildItem -LiteralPath '{TARGET}' -Recurse -Include *.dll,*.exe,*.pyd "
+                f"Get-ChildItem -LiteralPath '{target}' -Recurse -Include *.dll,*.exe,*.pyd "
                 f"| Unblock-File -ErrorAction SilentlyContinue",
             ],
             capture_output=True,
@@ -216,13 +220,13 @@ def _do_install(desktop: bool, status) -> tuple[bool, str]:
         pass
 
     START_MENU.mkdir(parents=True, exist_ok=True)
-    _create_shortcut(START_MENU / f"{APP_NAME}.lnk", exe, TARGET)
-    unbat = _write_uninstall(exe)
-    _create_shortcut(START_MENU / f"Uninstall {APP_NAME}.lnk", unbat, TARGET)
+    _create_shortcut(START_MENU / f"{APP_NAME}.lnk", exe, target)
+    unbat = _write_uninstall(target)
+    _create_shortcut(START_MENU / f"Uninstall {APP_NAME}.lnk", unbat, target)
     if desktop:
-        _create_shortcut(DESKTOP / f"{APP_NAME}.lnk", exe, TARGET)
+        _create_shortcut(DESKTOP / f"{APP_NAME}.lnk", exe, target)
 
-    return True, str(TARGET)
+    return True, str(target)
 
 
 def run_gui() -> int:
@@ -232,7 +236,8 @@ def run_gui() -> int:
     root = tk.Tk()
     root.title(f"{APP_NAME} — установка")
     root.resizable(False, False)
-    root.geometry("440x280")
+    root.minsize(480, 380)
+    root.geometry("500x400")
 
     ico = _icon_path()
     if ico and ico.suffix.lower() == ".ico":
@@ -241,34 +246,54 @@ def run_gui() -> int:
         except Exception:
             pass
 
-    frm = ttk.Frame(root, padding=20)
-    frm.pack(fill="both", expand=True)
+    # шапка + контент + кнопки всегда внизу (не обрезаются)
+    outer = ttk.Frame(root, padding=16)
+    outer.pack(fill="both", expand=True)
 
-    ttk.Label(frm, text=APP_NAME, font=("Segoe UI", 16, "bold")).pack(anchor="w")
+    ttk.Label(outer, text=APP_NAME, font=("Segoe UI", 18, "bold")).pack(anchor="w")
+    ttk.Label(outer, text=f"Версия {APP_VERSION}", font=("Segoe UI", 10)).pack(anchor="w", pady=(2, 10))
+
+    ttk.Label(outer, text="Папка установки").pack(anchor="w")
+    path_row = ttk.Frame(outer)
+    path_row.pack(fill="x", pady=(4, 8))
+    path_var = tk.StringVar(value=str(DEFAULT_TARGET))
+    path_entry = ttk.Entry(path_row, textvariable=path_var)
+    path_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+    def browse() -> None:
+        chosen = filedialog.askdirectory(
+            title="Папка установки",
+            initialdir=str(Path(path_var.get()).parent if path_var.get() else DEFAULT_TARGET.parent),
+        )
+        if chosen:
+            path_var.set(str(Path(chosen) / "MediaApp"))
+
+    browse_btn = ttk.Button(path_row, text="Обзор…", command=browse, width=10)
+    browse_btn.pack(side="right")
+
     ttk.Label(
-        frm,
-        text=f"Версия {APP_VERSION}\nУстановка в:\n{TARGET}\n\n"
-        "Всё нужное уже внутри (ffmpeg и библиотеки).\n"
-        "PATH и доп. зависимости не требуются.",
+        outer,
+        text="Всё нужное уже внутри (ffmpeg и библиотеки).\nPATH и доп. зависимости не требуются.",
         justify="left",
-    ).pack(anchor="w", pady=(8, 12))
+    ).pack(anchor="w", pady=(4, 10))
 
     desk_var = tk.BooleanVar(value=True)
-    ttk.Checkbutton(frm, text="Ярлык на рабочем столе", variable=desk_var).pack(anchor="w")
+    ttk.Checkbutton(outer, text="Ярлык на рабочем столе", variable=desk_var).pack(anchor="w")
 
     status_var = tk.StringVar(value="Готов к установке")
-    ttk.Label(frm, textvariable=status_var).pack(anchor="w", pady=(12, 4))
-    bar = ttk.Progressbar(frm, mode="indeterminate", length=380)
+    ttk.Label(outer, textvariable=status_var).pack(anchor="w", pady=(14, 4))
+    bar = ttk.Progressbar(outer, mode="indeterminate", length=440)
     bar.pack(fill="x")
 
-    btns = ttk.Frame(frm)
-    btns.pack(fill="x", pady=(16, 0))
+    # кнопки — отдельная нижняя полоса
+    btns = ttk.Frame(outer)
+    btns.pack(fill="x", side="bottom", pady=(18, 0))
 
     def set_status(text: str) -> None:
         status_var.set(text)
         root.update_idletasks()
 
-    def finish(ok: bool, detail: str) -> None:
+    def finish(ok: bool, detail: str, target: Path) -> None:
         bar.stop()
         if ok:
             status_var.set("Готово")
@@ -279,8 +304,8 @@ def run_gui() -> int:
             )
             if messagebox.askyesno(APP_NAME, "Запустить Media App сейчас?"):
                 subprocess.Popen(
-                    [str(TARGET / "MediaApp.exe")],
-                    cwd=str(TARGET),
+                    [str(target / "MediaApp.exe")],
+                    cwd=str(target),
                     close_fds=True,
                 )
             root.destroy()
@@ -289,28 +314,38 @@ def run_gui() -> int:
             messagebox.showerror(APP_NAME, detail)
             install_btn.configure(state="normal")
             cancel_btn.configure(state="normal")
+            browse_btn.configure(state="normal")
+            path_entry.configure(state="normal")
 
     def start_install() -> None:
-        if TARGET.exists() and not messagebox.askyesno(
-            APP_NAME, f"Папка уже есть:\n{TARGET}\n\nПерезаписать?"
+        raw = path_var.get().strip()
+        if not raw:
+            messagebox.showwarning(APP_NAME, "Укажите папку установки")
+            return
+        target = Path(raw)
+        if target.exists() and not messagebox.askyesno(
+            APP_NAME, f"Папка уже есть:\n{target}\n\nПерезаписать?"
         ):
             return
         install_btn.configure(state="disabled")
         cancel_btn.configure(state="disabled")
+        browse_btn.configure(state="disabled")
+        path_entry.configure(state="disabled")
         bar.start(12)
         set_status("Установка…")
 
         def worker() -> None:
-            ok, detail = _do_install(desk_var.get(), lambda t: root.after(0, set_status, t))
-            root.after(0, finish, ok, detail)
+            ok, detail = _do_install(target, desk_var.get(), lambda t: root.after(0, set_status, t))
+            root.after(0, finish, ok, detail, target)
 
         threading.Thread(target=worker, daemon=True).start()
 
     install_btn = ttk.Button(btns, text="Установить", command=start_install)
-    install_btn.pack(side="left")
+    install_btn.pack(side="left", ipadx=12, ipady=4)
     cancel_btn = ttk.Button(btns, text="Отмена", command=root.destroy)
-    cancel_btn.pack(side="right")
+    cancel_btn.pack(side="right", ipadx=8, ipady=4)
 
+    root.update_idletasks()
     root.mainloop()
     return 0
 
