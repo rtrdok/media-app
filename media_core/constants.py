@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 
 # owner/repo — публичный GitHub Releases для автообновления
 GITHUB_REPO = "rtrdok/media-app"

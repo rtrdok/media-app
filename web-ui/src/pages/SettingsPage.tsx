@@ -1,4 +1,4 @@
-import { CircleCheck, Download, RefreshCw } from "lucide-react"
+import { CircleAlert, CircleCheck, Download, RefreshCw } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,6 +21,7 @@ import {
   cookiesStatus,
   extensionSave,
   saveSettings,
+  updateStatus,
 } from "@/lib/api"
 import type { AppSettings } from "@/types"
 
@@ -32,9 +33,12 @@ export function SettingsPage() {
   const [updChangelog, setUpdChangelog] = useState("")
   const [updBusy, setUpdBusy] = useState(false)
   const [hasUpdate, setHasUpdate] = useState(false)
+  const [updUrl, setUpdUrl] = useState("")
+  const [updOk, setUpdOk] = useState(true)
   const [cookieOk, setCookieOk] = useState(false)
   const [extMsg, setExtMsg] = useState("")
   const dirtyRef = useRef(false)
+  const pollRef = useRef(0)
 
   useEffect(() => {
     if (state?.settings && !dirtyRef.current) {
@@ -71,16 +75,25 @@ export function SettingsPage() {
   async function onCheckUpdate() {
     setUpdBusy(true)
     setUpdChangelog("")
+    setUpdOk(true)
     try {
       const j = await checkUpdate(false)
       if (j.update?.version) {
         setHasUpdate(true)
+        setUpdOk(true)
         setUpdMsg(`Доступна версия ${j.update.version}`)
         setUpdChangelog(j.update.changelog || j.changelog || "")
+        setUpdUrl(j.update.url || "")
       } else {
         setHasUpdate(false)
+        setUpdUrl("")
+        setUpdOk(j.ok !== false)
         setUpdMsg(j.message || "Установлена последняя версия")
       }
+    } catch (e) {
+      setUpdOk(false)
+      setHasUpdate(false)
+      setUpdMsg(e instanceof Error ? e.message : String(e))
     } finally {
       setUpdBusy(false)
     }
@@ -88,19 +101,47 @@ export function SettingsPage() {
 
   async function onApplyUpdate() {
     setUpdBusy(true)
+    setUpdOk(true)
     setUpdMsg("Скачивание обновления…")
     try {
-      const j = await applyUpdate()
-      setUpdMsg(j.message || (j.ok ? "Готово" : "Ошибка обновления"))
-      if (j.restart) {
-        setUpdMsg("Обновление скачано — приложение перезапустится…")
+      const j = await applyUpdate(updUrl || undefined)
+      if (!j.ok && j.status === "error") {
+        setUpdOk(false)
+        setUpdMsg(j.message || "Ошибка обновления")
+        setUpdBusy(false)
+        return
       }
+      setUpdMsg(j.message || "Скачивание…")
+      window.clearInterval(pollRef.current)
+      pollRef.current = window.setInterval(() => {
+        void updateStatus()
+          .then((s) => {
+            if (s.message) setUpdMsg(s.message)
+            if (s.status === "error") {
+              setUpdOk(false)
+              setUpdBusy(false)
+              window.clearInterval(pollRef.current)
+            }
+            if (s.status === "done" || s.restart) {
+              setUpdOk(true)
+              setUpdMsg(s.message || "Перезапуск…")
+              window.clearInterval(pollRef.current)
+            }
+          })
+          .catch(() => {
+            /* ignore transient */
+          })
+      }, 800)
     } catch (e) {
-      setUpdMsg(String(e))
-    } finally {
+      setUpdOk(false)
+      setUpdMsg(e instanceof Error ? e.message : String(e))
       setUpdBusy(false)
     }
   }
+
+  useEffect(() => {
+    return () => window.clearInterval(pollRef.current)
+  }, [])
 
   return (
     <div className="flex min-h-[calc(100vh-4rem)] w-full flex-col pt-8 pr-8 pb-32 pl-8">
@@ -260,7 +301,11 @@ export function SettingsPage() {
           <CardContent className="space-y-4 p-0">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex min-w-0 items-start gap-2 text-sm">
-                <CircleCheck className="mt-0.5 size-5 shrink-0 text-emerald-500" />
+                {updOk ? (
+                  <CircleCheck className="mt-0.5 size-5 shrink-0 text-emerald-500" />
+                ) : (
+                  <CircleAlert className="text-destructive mt-0.5 size-5 shrink-0" />
+                )}
                 <div className="min-w-0">
                   <p>{updMsg}</p>
                   {updChangelog ? (

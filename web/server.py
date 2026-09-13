@@ -709,64 +709,101 @@ async def check_update(quiet: int = 0):
     import json
     import urllib.request
 
-    set_last_update_check()
-    # 1) GitHub Releases (основной путь)
-    gh = await asyncio.to_thread(check_github_update)
-    if gh.get("update") or not get_update_check_url():
-        # Совместимость со старым UI: update как объект при наличии новой версии
-        if gh.get("update"):
-            return {
-                **gh,
-                "quiet": bool(quiet),
-                "update": {
-                    "version": gh.get("remote") or "",
+    try:
+        set_last_update_check()
+        gh = await asyncio.to_thread(check_github_update)
+        if gh.get("update") or not get_update_check_url():
+            if gh.get("update"):
+                return {
+                    "ok": True,
+                    "current": gh.get("current") or APP_VERSION,
+                    "remote": gh.get("remote") or "",
                     "url": gh.get("url") or "",
                     "changelog": gh.get("changelog") or "",
-                },
+                    "quiet": bool(quiet),
+                    "message": gh.get("message") or "",
+                    "update": {
+                        "version": gh.get("remote") or "",
+                        "url": gh.get("url") or "",
+                        "changelog": gh.get("changelog") or "",
+                    },
+                }
+            return {
+                "ok": bool(gh.get("ok", True)),
+                "current": gh.get("current") or APP_VERSION,
+                "remote": gh.get("remote") or "",
+                "url": gh.get("url") or "",
+                "changelog": gh.get("changelog") or "",
+                "quiet": bool(quiet),
+                "message": gh.get("message") or "Установлена актуальная версия",
+                "update": None,
             }
-        return {**gh, "quiet": bool(quiet), "update": None}
 
-    # 2) Legacy JSON URL из настроек
-    url = get_update_check_url()
+        url = get_update_check_url()
 
-    def _fetch():
-        with urllib.request.urlopen(url, timeout=12) as r:
-            return json.loads(r.read().decode("utf-8", errors="replace"))
+        def _fetch():
+            with urllib.request.urlopen(url, timeout=12) as r:
+                return json.loads(r.read().decode("utf-8", errors="replace"))
 
-    try:
-        data = await asyncio.to_thread(_fetch)
+        try:
+            data = await asyncio.to_thread(_fetch)
+        except Exception as e:
+            return {
+                "ok": False,
+                "current": APP_VERSION,
+                "remote": "",
+                "update": None,
+                "url": "",
+                "error": str(e),
+                "message": str(e),
+            }
+        remote = str(data.get("version") or "").strip()
+        download = str(data.get("url") or data.get("download_url") or "").strip()
+        changelog = str(data.get("changelog") or data.get("notes") or "").strip()
+        newer = bool(remote and is_newer(remote, APP_VERSION))
+        return {
+            "ok": True,
+            "current": APP_VERSION,
+            "remote": remote,
+            "update": {"version": remote, "url": download, "changelog": changelog} if newer else None,
+            "url": download,
+            "changelog": changelog,
+            "quiet": bool(quiet),
+            "message": (f"Доступна {remote}" if newer else "У тебя актуальная версия"),
+        }
     except Exception as e:
         return {
             "ok": False,
             "current": APP_VERSION,
-            "remote": "",
             "update": None,
-            "url": "",
+            "message": f"Ошибка проверки: {e}",
             "error": str(e),
-            "message": str(e),
         }
-    remote = str(data.get("version") or "").strip()
-    download = str(data.get("url") or data.get("download_url") or "").strip()
-    changelog = str(data.get("changelog") or data.get("notes") or "").strip()
-    newer = bool(remote and is_newer(remote, APP_VERSION))
-    return {
-        "ok": True,
-        "current": APP_VERSION,
-        "remote": remote,
-        "update": {"version": remote, "url": download, "changelog": changelog} if newer else None,
-        "url": download,
-        "changelog": changelog,
-        "quiet": bool(quiet),
-        "message": (f"Доступна {remote}" if newer else "У тебя актуальная версия"),
-    }
+
+
+class ApplyUpdateIn(BaseModel):
+    url: str | None = None
 
 
 @app.post("/api/app/apply_update")
-async def apply_update():
-    from media_core.updater import download_and_apply_update
+async def apply_update(body: ApplyUpdateIn | None = None):
+    from media_core.updater import start_update_job
 
-    result = await asyncio.to_thread(download_and_apply_update)
-    return result
+    try:
+        url = body.url if body else None
+        return await asyncio.to_thread(start_update_job, url)
+    except Exception as e:
+        return {"ok": False, "status": "error", "message": f"Ошибка: {e}", "error": str(e)}
+
+
+@app.get("/api/app/update_status")
+async def update_status():
+    from media_core.updater import get_update_job
+
+    try:
+        return {"ok": True, **get_update_job()}
+    except Exception as e:
+        return {"ok": False, "status": "error", "message": str(e)}
 
 
 @app.get("/api/backup/export")

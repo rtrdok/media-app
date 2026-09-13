@@ -1,3 +1,9 @@
+## [1.4.1] — 2026-09-13
+
+### Fixed
+- **RU:** Ошибка «Internal Server Error» при «Скачать и обновить» — скачивание в фоне, без зависания  
+  **EN:** Fixed update download Internal Server Error (background download)
+
 ## [1.4.0] — 2026-09-13
 
 ### Added / Добавлено

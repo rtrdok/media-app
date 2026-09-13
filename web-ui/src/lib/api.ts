@@ -229,14 +229,30 @@ export function checkUpdate(quiet = false) {
   }>(`/api/app/check_update?quiet=${quiet ? 1 : 0}`, { method: "POST" })
 }
 
-export function applyUpdate() {
+export function applyUpdate(url?: string) {
   return json<{
     ok: boolean
     applied?: boolean
     restart?: boolean
+    status?: string
     message?: string
     error?: string
-  }>("/api/app/apply_update", { method: "POST" })
+  }>("/api/app/apply_update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: url || null }),
+  })
+}
+
+export function updateStatus() {
+  return json<{
+    ok: boolean
+    status?: string
+    pct?: number
+    message?: string
+    error?: string
+    restart?: boolean
+  }>("/api/app/update_status")
 }
 
 export function cookiesStatus() {
