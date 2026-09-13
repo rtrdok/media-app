@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 
 APP_NAME = "Media App"
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.3"
 TARGET = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "MediaApp"
 START_MENU = (
     Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))

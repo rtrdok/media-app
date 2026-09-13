@@ -58,6 +58,7 @@ _LISTEN_PORT = 17865
 _show_window_cb = None
 _fullscreen_cb = None
 _on_top_cb = None
+_mini_player_cb = None
 
 
 def set_listen_port(port: int) -> None:
@@ -82,6 +83,11 @@ def set_fullscreen_callback(cb) -> None:
 def set_on_top_callback(cb) -> None:
     global _on_top_cb
     _on_top_cb = cb
+
+
+def set_mini_player_callback(cb) -> None:
+    global _mini_player_cb
+    _mini_player_cb = cb
 
 
 def _fmt_height(h: int) -> str:
@@ -1085,6 +1091,136 @@ async def window_on_top(body: OnTopIn):
         except Exception:
             ok = False
     return {"ok": ok, "enable": bool(body.enable)}
+
+
+@app.get("/api/player/state")
+async def api_player_state():
+    from media_core.player_bridge import get_state, is_mini_open
+
+    s = get_state()
+    s["mini_open"] = is_mini_open()
+    return {"ok": True, **s}
+
+
+class PlayerPublishIn(BaseModel):
+    title: str | None = None
+    artist: str | None = None
+    playing: bool | None = None
+    current: float | None = None
+    duration: float | None = None
+    volume: float | None = None
+    has_track: bool | None = None
+
+
+@app.post("/api/player/publish")
+async def api_player_publish(body: PlayerPublishIn):
+    from media_core.player_bridge import publish_state
+
+    return {"ok": True, **publish_state(**body.model_dump())}
+
+
+class PlayerControlIn(BaseModel):
+    action: str  # play | pause | toggle | next | prev | volume | seek | close_mini
+    value: float | None = None
+
+
+@app.post("/api/player/control")
+async def api_player_control(body: PlayerControlIn):
+    from media_core.player_bridge import push_command
+
+    return push_command(body.action, value=body.value)
+
+
+@app.get("/api/player/commands")
+async def api_player_commands():
+    from media_core.player_bridge import pop_commands
+
+    return {"ok": True, "commands": pop_commands()}
+
+
+class MiniPlayerIn(BaseModel):
+    enable: bool = True
+
+
+@app.post("/api/window/mini_player")
+async def api_mini_player(body: MiniPlayerIn):
+    """Только флаг желаемого состояния. Show/hide — через pywebview.api (GUI-поток)."""
+    from media_core.player_bridge import set_mini_want
+
+    set_mini_want(bool(body.enable))
+    # Не вызываем _mini_player_cb здесь: show/hide HWND из uvicorn зависает приложение на Windows.
+    return {"ok": True, "enable": bool(body.enable), "gui": True}
+
+
+@app.get("/mini")
+async def mini_page():
+    """Отдельная страница мини-плеера (второе окно)."""
+    from fastapi.responses import HTMLResponse
+
+    html = """<!DOCTYPE html>
+<html lang="ru"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Media App</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;font-family:Segoe UI,system-ui,sans-serif;
+    background:linear-gradient(135deg,#0f172a,#1e293b);color:#f8fafc;user-select:none}
+  .bar{display:flex;align-items:center;gap:10px;height:100%;padding:10px 14px;box-sizing:border-box;
+    -webkit-app-region:drag}
+  .btn{-webkit-app-region:no-drag;border:0;background:transparent;color:#e2e8f0;cursor:pointer;
+    width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:14px}
+  .btn:hover{background:rgba(255,255,255,.08)}
+  .play{background:#14b8a6;color:#fff;border-radius:999px;width:42px;height:42px}
+  .play:hover{filter:brightness(1.08)}
+  .meta{min-width:0;flex:1}
+  .title{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .artist{font-size:11px;opacity:.65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .vol{-webkit-app-region:no-drag;width:90px;accent-color:#14b8a6}
+  .x{opacity:.7}
+</style></head><body>
+<div class="bar">
+  <button class="btn" id="prev" title="Предыдущий">&#9198;</button>
+  <button class="btn play" id="toggle" title="Play/Pause">&#9654;</button>
+  <button class="btn" id="next" title="Следующий">&#9197;</button>
+  <div class="meta"><div class="title" id="title">&mdash;</div><div class="artist" id="artist"></div></div>
+  <input class="vol" id="vol" type="range" min="0" max="1" step="0.05" value="0.85" title="Громкость"/>
+  <button class="btn x" id="close" title="Закрыть мини-плеер">&#10005;</button>
+</div>
+<script>
+async function j(url, opt){const r=await fetch(url,opt);return r.json()}
+function ctrl(action,value){
+  return j('/api/player/control',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action,value})})
+}
+const title=document.getElementById('title'), artist=document.getElementById('artist');
+const toggle=document.getElementById('toggle'), vol=document.getElementById('vol');
+document.getElementById('prev').onclick=()=>ctrl('prev');
+document.getElementById('next').onclick=()=>ctrl('next');
+toggle.onclick=()=>ctrl('toggle');
+vol.oninput=()=>ctrl('volume', Number(vol.value));
+document.getElementById('close').onclick=async()=>{
+  await ctrl('close_mini');
+  try{
+    if(window.pywebview&&window.pywebview.api&&window.pywebview.api.hide_mini){
+      await window.pywebview.api.hide_mini();
+      return;
+    }
+  }catch(e){}
+  await j('/api/window/mini_player',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({enable:false})});
+};
+async function tick(){
+  try{
+    const s=await j('/api/player/state');
+    title.textContent=s.title||'—';
+    artist.textContent=s.artist||'';
+    toggle.textContent=s.playing?'❚❚':'▶';
+    if(typeof s.volume==='number' && Math.abs(s.volume-Number(vol.value))>0.04) vol.value=s.volume;
+  }catch(e){}
+}
+setInterval(tick,500); tick();
+</script></body></html>"""
+    return HTMLResponse(html)
 
 
 @app.post("/api/lyrics")

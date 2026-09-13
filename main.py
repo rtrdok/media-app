@@ -40,6 +40,7 @@ from web.server import (
     app,
     set_fullscreen_callback,
     set_listen_port,
+    set_mini_player_callback,
     set_on_top_callback,
     set_show_window_callback,
 )
@@ -258,6 +259,49 @@ def main() -> None:
 
         set_on_top_callback(_set_on_top)
 
+        _mini_win: dict = {"win": None}
+
+        def _apply_mini_player(enable: bool) -> bool:
+            """show/hide только из GUI-потока (js_api), иначе WinForms зависает."""
+            from media_core.player_bridge import set_mini_open
+
+            win = _mini_win.get("win")
+            if win is None:
+                set_mini_open(False)
+                return False
+            try:
+                if enable:
+                    win.show()
+                    try:
+                        win.on_top = True
+                    except Exception:
+                        pass
+                    set_mini_open(True)
+                else:
+                    win.hide()
+                    set_mini_open(False)
+                return True
+            except Exception:
+                log.exception("mini player show/hide failed")
+                set_mini_open(False)
+                return False
+
+        class GuiApi:
+            def apply_mini_player(self, enable: bool):
+                return {"ok": _apply_mini_player(bool(enable))}
+
+            def hide_mini(self):
+                return {"ok": _apply_mini_player(False)}
+
+        def _set_mini_player(enable: bool):
+            # HTTP fallback: не трогаем HWND из uvicorn-потока — только флаг.
+            # Реальное окно открывает фронт через pywebview.api.apply_mini_player.
+            from media_core.player_bridge import set_mini_want
+
+            set_mini_want(bool(enable))
+
+        set_mini_player_callback(_set_mini_player)
+
         log.info("Media App (web UI) -> http://%s:%s  downloads=%s", HOST, PORT, get_download_dir())
         threading.Thread(target=_serve, args=(PORT,), daemon=True).start()
         _wait(PORT)
@@ -265,6 +309,7 @@ def main() -> None:
         import webview
 
         icon = _window_icon_path()
+        gui_api = GuiApi()
         window = webview.create_window(
             "Media App",
             f"http://{HOST}:{PORT}/",
@@ -274,8 +319,43 @@ def main() -> None:
             background_color="#0B1020",
             frameless=False,
             easy_drag=False,
+            js_api=gui_api,
         )
         _window = window
+
+        mini = webview.create_window(
+            "Media App",
+            f"http://{HOST}:{PORT}/mini",
+            width=440,
+            height=78,
+            on_top=True,
+            frameless=True,
+            easy_drag=True,
+            background_color="#0f172a",
+            resizable=False,
+            hidden=True,
+            js_api=gui_api,
+        )
+        _mini_win["win"] = mini
+
+        def on_mini_closing():
+            from media_core.player_bridge import push_command, set_mini_open
+
+            set_mini_open(False)
+            try:
+                push_command("close_mini")
+            except Exception:
+                pass
+            try:
+                mini.hide()
+            except Exception:
+                pass
+            return False
+
+        try:
+            mini.events.closing += on_mini_closing
+        except Exception:
+            pass
 
         def on_closing():
             if _exit_requested:
@@ -294,6 +374,16 @@ def main() -> None:
             pass
 
         def on_closed():
+            try:
+                mw = _mini_win.get("win")
+                _mini_win["win"] = None
+                if mw is not None:
+                    try:
+                        mw.destroy()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             try:
                 from web.server import request_app_shutdown
 

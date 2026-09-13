@@ -116,7 +116,81 @@ export function setWindowOnTop(enable: boolean) {
   })
 }
 
-export function fetchLyrics(title: string, artist = "") {
+export function setMiniPlayerWindow(enable: boolean) {
+  return json<{ ok: boolean; enable?: boolean }>("/api/window/mini_player", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enable }),
+  })
+}
+
+type PywebviewApi = {
+  apply_mini_player?: (enable: boolean) => Promise<{ ok?: boolean } | boolean>
+  hide_mini?: () => Promise<{ ok?: boolean } | boolean>
+}
+
+function pywebviewApi(): PywebviewApi | null {
+  const w = window as Window & { pywebview?: { api?: PywebviewApi } }
+  return w.pywebview?.api ?? null
+}
+
+function waitPywebview(ms = 2000): Promise<PywebviewApi | null> {
+  const existing = pywebviewApi()
+  if (existing) return Promise.resolve(existing)
+  return new Promise((resolve) => {
+    const done = () => resolve(pywebviewApi())
+    const t = window.setTimeout(done, ms)
+    window.addEventListener(
+      "pywebviewready",
+      () => {
+        window.clearTimeout(t)
+        done()
+      },
+      { once: true },
+    )
+  })
+}
+
+/** Открыть/закрыть мини-окно из GUI-потока (без зависания WinForms). */
+export async function applyMiniPlayerWindow(enable: boolean): Promise<{ ok: boolean }> {
+  const api = await waitPywebview()
+  if (api?.apply_mini_player) {
+    try {
+      const r = await api.apply_mini_player(enable)
+      const ok = typeof r === "boolean" ? r : Boolean(r && (r as { ok?: boolean }).ok !== false)
+      void setMiniPlayerWindow(enable)
+      return { ok }
+    } catch {
+      /* fall through */
+    }
+  }
+  const res = await setMiniPlayerWindow(enable)
+  return { ok: Boolean(res.ok) }
+}
+
+export function publishPlayerState(body: {
+  title?: string
+  artist?: string
+  playing?: boolean
+  current?: number
+  duration?: number
+  volume?: number
+  has_track?: boolean
+}) {
+  return fetch("/api/player/publish", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+}
+
+export function fetchPlayerCommands() {
+  return json<{ ok: boolean; commands?: { action: string; value?: number | null }[] }>(
+    "/api/player/commands",
+  )
+}
+
+export function fetchLyrics(title: string, artist = "", duration?: number) {
   return json<{
     ok: boolean
     lyrics?: string
@@ -125,7 +199,7 @@ export function fetchLyrics(title: string, artist = "") {
   }>("/api/lyrics", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, artist }),
+    body: JSON.stringify({ title, artist, duration }),
   })
 }
 

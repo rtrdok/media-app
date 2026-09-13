@@ -19,7 +19,12 @@ import { AddToPlaylistsModal } from "@/components/library/AddToPlaylistsModal"
 import { LyricsModal } from "@/components/player/LyricsModal"
 import { PlayerQueuePanel } from "@/components/player/PlayerQueuePanel"
 import { useApp } from "@/context/AppProvider"
-import { setWindowFullscreen, setWindowOnTop } from "@/lib/api"
+import {
+  fetchPlayerCommands,
+  publishPlayerState,
+  applyMiniPlayerWindow,
+  setWindowFullscreen,
+} from "@/lib/api"
 import { filePathFromPlayerSrc, isVideoSrc } from "@/lib/media"
 import { cn } from "@/lib/utils"
 
@@ -48,6 +53,8 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   const nativeFs = useRef(false)
   const [progress, setProgress] = useState(0)
   const [current, setCurrent] = useState("0:00")
+  const [currentSec, setCurrentSec] = useState(0)
+  const [durationSec, setDurationSec] = useState(0)
   const [total, setTotal] = useState(player?.durationLabel ?? "0:00")
   const [volume, setVolume] = useState(0.85)
   const [seeking, setSeeking] = useState(false)
@@ -59,6 +66,8 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   const hideTimer = useRef(0)
   const volumeRef = useRef(volume)
   volumeRef.current = volume
+  const playingRef = useRef(playing)
+  playingRef.current = playing
 
   const hidden = page === "settings" && !showOnSettings
   const hasSrc = Boolean(player?.src)
@@ -84,6 +93,8 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   useEffect(() => {
     setTotal(player?.durationLabel ?? "0:00")
     setCurrent("0:00")
+    setCurrentSec(0)
+    setDurationSec(0)
     setProgress(0)
     void applyFullscreen(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -115,10 +126,6 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     if (!hasSrc) void applyFullscreen(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasSrc])
-
-  useEffect(() => {
-    void setWindowOnTop(miniPlayer)
-  }, [miniPlayer])
 
   useEffect(() => {
     if (!theater) return
@@ -184,12 +191,72 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     }
   }, [isVideo, playing, player?.src, theater])
 
+  // Синхронизация с отдельным окном мини-плеера
+  useEffect(() => {
+    if (!hasSrc) return
+    const publish = () => {
+      const el = mediaRef.current
+      void publishPlayerState({
+        title: player?.title || "",
+        artist: player?.artist || "",
+        playing: playingRef.current,
+        current: el?.currentTime ?? 0,
+        duration: el?.duration && Number.isFinite(el.duration) ? el.duration : 0,
+        volume: volumeRef.current,
+        has_track: true,
+      })
+    }
+    publish()
+    const id = window.setInterval(publish, 700)
+    return () => window.clearInterval(id)
+  }, [hasSrc, player?.title, player?.artist, playing, volume])
+
+  useEffect(() => {
+    if (!hasSrc) return
+    const id = window.setInterval(() => {
+      void fetchPlayerCommands()
+        .then((j) => {
+          const cmds = j.commands || []
+          for (const c of cmds) {
+            if (c.action === "toggle") setPlaying((p) => !p)
+            else if (c.action === "play") setPlaying(true)
+            else if (c.action === "pause") setPlaying(false)
+            else if (c.action === "next") playNextInQueue()
+            else if (c.action === "prev") playPrevInQueue()
+            else if (c.action === "volume" && typeof c.value === "number") {
+              setVolume(Math.min(1, Math.max(0, c.value)))
+            } else if (c.action === "seek" && typeof c.value === "number") {
+              const el = mediaRef.current
+              if (el && Number.isFinite(c.value)) {
+                el.currentTime = c.value
+                setCurrentSec(c.value)
+                setCurrent(fmt(c.value))
+              }
+            } else if (c.action === "close_mini") {
+              setMiniPlayer(false)
+            }
+          }
+        })
+        .catch(() => {})
+    }, 400)
+    return () => window.clearInterval(id)
+  }, [hasSrc, playNextInQueue, playPrevInQueue, setPlaying, setMiniPlayer])
+
+  useEffect(() => {
+    if (!hasSrc && miniPlayer) {
+      setMiniPlayer(false)
+      void applyMiniPlayerWindow(false)
+    }
+  }, [hasSrc, miniPlayer, setMiniPlayer])
+
   const onTime = () => {
     if (seeking) return
     const el = mediaRef.current
     if (!el || !el.duration) return
     setProgress(el.currentTime / el.duration)
     setCurrent(fmt(el.currentTime))
+    setCurrentSec(el.currentTime)
+    setDurationSec(el.duration)
     setTotal(fmt(el.duration))
   }
 
@@ -200,7 +267,18 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     el.currentTime = t
     setProgress(fraction)
     setCurrent(fmt(t))
+    setCurrentSec(t)
     setTotal(fmt(el.duration))
+  }
+
+  function seekToSec(sec: number) {
+    const el = mediaRef.current
+    if (!el || !el.duration) return
+    const t = Math.min(el.duration, Math.max(0, sec))
+    el.currentTime = t
+    setProgress(t / el.duration)
+    setCurrent(fmt(t))
+    setCurrentSec(t)
   }
 
   function onEnded() {
@@ -209,9 +287,24 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
 
   function onClose() {
     void applyFullscreen(false)
-    setMiniPlayer(false)
-    void setWindowOnTop(false)
+    if (miniPlayer) {
+      setMiniPlayer(false)
+      void applyMiniPlayerWindow(false)
+    }
     closePlayer()
+  }
+
+  async function toggleMiniPlayer() {
+    const next = !miniPlayer
+    setMiniPlayer(next)
+    try {
+      const res = await applyMiniPlayerWindow(next)
+      if (next && !res.ok) {
+        setMiniPlayer(false)
+      }
+    } catch {
+      setMiniPlayer(false)
+    }
   }
 
   if (hidden || !hasSrc) return null
@@ -224,10 +317,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     <div
       className={cn(
         "bg-card/95 border-border flex h-[72px] shrink-0 items-center gap-3 border-t pr-4 pl-4 backdrop-blur-sm transition-opacity duration-300 sm:gap-4 sm:pr-6 sm:pl-6",
-        !isVideo && !miniPlayer && "fixed z-40 right-0 bottom-0 left-[232px]",
-        miniPlayer &&
-          !isVideo &&
-          "fixed z-[90] right-4 bottom-4 left-auto w-[min(420px,calc(100vw-2rem))] rounded-2xl border shadow-2xl",
+        !isVideo && "fixed z-40 right-0 bottom-0 left-[232px]",
         isVideo && !uiVisible && "pointer-events-none opacity-0",
       )}
     >
@@ -281,45 +371,37 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
           {queueMeta.length > 1 ? ` · ${queueMeta.index + 1}/${queueMeta.length}` : ""}
         </p>
       </div>
-      {!miniPlayer ? (
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <span className="text-muted-foreground w-9 shrink-0 text-xs tabular-nums">{current}</span>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.001}
-            value={Number.isFinite(progress) ? progress : 0}
-            aria-label="Позиция воспроизведения"
-            className="accent-primary h-1.5 min-w-[80px] flex-1 cursor-pointer"
-            onChange={(e) => {
-              setSeeking(true)
-              seekTo(Number(e.target.value))
-            }}
-            onMouseUp={() => setSeeking(false)}
-            onTouchEnd={() => setSeeking(false)}
-          />
-          <span className="text-muted-foreground w-9 shrink-0 text-right text-xs tabular-nums">{total}</span>
-        </div>
-      ) : (
-        <div className="min-w-0 flex-1" />
-      )}
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        <span className="text-muted-foreground w-9 shrink-0 text-xs tabular-nums">{current}</span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.001}
+          value={Number.isFinite(progress) ? progress : 0}
+          aria-label="Позиция воспроизведения"
+          className="accent-primary h-1.5 min-w-[80px] flex-1 cursor-pointer"
+          onChange={(e) => {
+            setSeeking(true)
+            seekTo(Number(e.target.value))
+          }}
+          onMouseUp={() => setSeeking(false)}
+          onTouchEnd={() => setSeeking(false)}
+        />
+        <span className="text-muted-foreground w-9 shrink-0 text-right text-xs tabular-nums">{total}</span>
+      </div>
       <div className="relative flex shrink-0 items-center gap-0.5 sm:gap-1">
-        {!miniPlayer ? (
-          <>
-            <Volume2 className="text-muted-foreground size-4 shrink-0" aria-hidden />
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={volume}
-              onChange={(e) => setVolume(Number(e.target.value))}
-              className="accent-primary h-1.5 w-16 cursor-pointer sm:w-24"
-              aria-label="Уровень громкости"
-            />
-          </>
-        ) : null}
+        <Volume2 className="text-muted-foreground size-4 shrink-0" aria-hidden />
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={volume}
+          onChange={(e) => setVolume(Number(e.target.value))}
+          className="accent-primary h-1.5 w-16 cursor-pointer sm:w-24"
+          aria-label="Уровень громкости"
+        />
         {isVideo ? (
           <button
             type="button"
@@ -373,14 +455,17 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
           type="button"
           title="Текст песни (L)"
           onClick={() => setLyricsOpen(true)}
-          className="text-muted-foreground hover:text-foreground flex size-9 items-center justify-center rounded-lg"
+          className={cn(
+            "flex size-9 items-center justify-center rounded-lg",
+            lyricsOpen ? "text-primary" : "text-muted-foreground hover:text-foreground",
+          )}
         >
           <Mic2 className="size-4" />
         </button>
         <button
           type="button"
-          title={miniPlayer ? "Обычный плеер" : "Мини-плеер поверх окон"}
-          onClick={() => setMiniPlayer((v) => !v)}
+          title={miniPlayer ? "Закрыть мини-плеер" : "Мини-плеер (отдельное окно)"}
+          onClick={() => void toggleMiniPlayer()}
           className={cn(
             "flex size-9 items-center justify-center rounded-lg",
             miniPlayer ? "text-primary" : "text-muted-foreground hover:text-foreground",
@@ -422,6 +507,9 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         open={lyricsOpen}
         title={player?.title || ""}
         artist={player?.artist || ""}
+        currentTime={currentSec}
+        duration={durationSec || undefined}
+        onSeek={seekToSec}
         onClose={() => setLyricsOpen(false)}
       />
     </>

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.3"
 
 # owner/repo — публичный GitHub Releases для автообновления
 GITHUB_REPO = "rtrdok/media-app"
@@ -28,4 +28,4 @@ URL_PATTERN = (
 SUPPORTED_PLATFORMS_TEXT = (
     "TikTok / Instagram / YouTube / Coub / VK / RuTube / X / SoundCloud / Яндекс Музыка"
 )
-
+

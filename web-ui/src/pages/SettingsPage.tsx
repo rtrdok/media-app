@@ -56,7 +56,9 @@ export function SettingsPage() {
     void cookiesStatus().then((j) => setCookieOk(j.active))
   }, [])
 
-  if (!draft) return null
+  useEffect(() => {
+    return () => window.clearInterval(pollRef.current)
+  }, [])
 
   function patch(p: Partial<AppSettings>) {
     dirtyRef.current = true
@@ -139,9 +141,13 @@ export function SettingsPage() {
     }
   }
 
-  useEffect(() => {
-    return () => window.clearInterval(pollRef.current)
-  }, [])
+  if (!draft) {
+    return (
+      <div className="text-muted-foreground flex min-h-[calc(100vh-4rem)] items-center justify-center p-8 text-sm">
+        Загрузка настроек…
+      </div>
+    )
+  }
 
   return (
     <div className="flex min-h-[calc(100vh-4rem)] w-full flex-col pt-8 pr-8 pb-32 pl-8">
@@ -158,7 +164,14 @@ export function SettingsPage() {
           <CardContent className="space-y-5 p-0">
             <div className="flex items-center justify-between gap-8">
               <Label>Язык интерфейса</Label>
-              <Select value={draft.ui_lang} onValueChange={(v) => v && patch({ ui_lang: v })}>
+              <Select
+                value={draft.ui_lang}
+                onValueChange={(v) => v && patch({ ui_lang: v })}
+                items={[
+                  { value: "ru", label: "Русский" },
+                  { value: "en", label: "English" },
+                ]}
+              >
                 <SelectTrigger className="w-56">
                   <SelectValue />
                 </SelectTrigger>
@@ -170,7 +183,15 @@ export function SettingsPage() {
             </div>
             <div className="flex items-center justify-between gap-8">
               <Label>Тема</Label>
-              <Select value={draft.theme} onValueChange={(v) => v && patch({ theme: v })}>
+              <Select
+                value={draft.theme}
+                onValueChange={(v) => v && patch({ theme: v })}
+                items={[
+                  { value: "dark", label: "Тёмная" },
+                  { value: "light", label: "Светлая" },
+                  { value: "system", label: "Как в системе" },
+                ]}
+              >
                 <SelectTrigger className="w-56">
                   <SelectValue />
                 </SelectTrigger>
@@ -186,6 +207,13 @@ export function SettingsPage() {
               <Select
                 value={draft.accent || "blue"}
                 onValueChange={(v) => v && patch({ accent: v })}
+                items={[
+                  { value: "blue", label: "Синий" },
+                  { value: "teal", label: "Бирюзовый" },
+                  { value: "rose", label: "Розовый" },
+                  { value: "amber", label: "Янтарный" },
+                  { value: "violet", label: "Фиолетовый" },
+                ]}
               >
                 <SelectTrigger className="w-56">
                   <SelectValue />
