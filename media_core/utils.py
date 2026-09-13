@@ -448,46 +448,194 @@ async def trim_audio(path: str, start: float, duration: float) -> str | None:
     return await asyncio.to_thread(_trim_audio_sync, path, start, duration)
 
 
-def _remux_coub_looped_sync(path: str) -> str:
+def _probe_media_duration(path: str) -> float:
+    """Длительность файла через ffprobe (секунды), 0 при ошибке."""
+    import json
     import subprocess
 
     if not path or not os.path.isfile(path):
-        return path
-    base, ext = os.path.splitext(path)
-    out = f"{base}_coubloop{ext or '.mp4'}"
+        return 0.0
+    ffprobe = _ffmpeg_bin().replace("ffmpeg", "ffprobe")
+    # imageio отдаёт только ffmpeg.exe — рядом может не быть ffprobe
+    candidates = [ffprobe, "ffprobe"]
+    for probe in candidates:
+        try:
+            r = subprocess.run(
+                [
+                    probe,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "json",
+                    path,
+                ],
+                capture_output=True,
+                timeout=30,
+                text=True,
+                **subprocess_no_window_kwargs(),
+            )
+            if r.returncode != 0:
+                continue
+            data = json.loads(r.stdout or "{}")
+            return float((data.get("format") or {}).get("duration") or 0)
+        except Exception:
+            continue
+    # fallback: ffmpeg -i
+    try:
+        r = subprocess.run(
+            [_ffmpeg_bin(), "-i", path],
+            capture_output=True,
+            timeout=30,
+            text=True,
+            **subprocess_no_window_kwargs(),
+        )
+        err = (r.stderr or "") + (r.stdout or "")
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", err)
+        if not m:
+            return 0.0
+        return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    except Exception:
+        return 0.0
+
+
+def merge_coub_looped(video_path: str, audio_path: str, out_path: str) -> str:
+    """Склеить Coub: видео крутится, пока не кончится аудио."""
+    import subprocess
+
+    if not video_path or not os.path.isfile(video_path):
+        return video_path
+    if not audio_path or not os.path.isfile(audio_path):
+        return video_path
+    ffmpeg = _ffmpeg_bin()
     cmd = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-stream_loop", "-1", "-i", path,
-        "-i", path,
-        "-shortest", "-shortest_buf_duration", "0",
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-c", "copy",
-        out,
+        ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-stream_loop",
+        "-1",
+        "-i",
+        video_path,
+        "-i",
+        audio_path,
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-shortest",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "20",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        out_path,
     ]
     try:
         subprocess.run(
             cmd,
             check=True,
             capture_output=True,
-            timeout=300,
+            timeout=600,
             text=True,
             **subprocess_no_window_kwargs(),
         )
-        if not os.path.isfile(out) or os.path.getsize(out) < 1024:
-            raise RuntimeError("coub remux output missing or too small")
-        os.replace(out, path)
-        log.info("coub remux: ok %s", os.path.basename(path))
+        if not os.path.isfile(out_path) or os.path.getsize(out_path) < 1024:
+            raise RuntimeError("coub merge output missing")
+        log.info(
+            "coub merge loop: ok %s (v=%s a=%s)",
+            os.path.basename(out_path),
+            os.path.basename(video_path),
+            os.path.basename(audio_path),
+        )
+        return out_path
+    except subprocess.CalledProcessError as e:
+        log.warning("coub merge: %s", (e.stderr or e.stdout or str(e)).strip())
+        return video_path
+    except Exception as e:
+        log.warning("coub merge: %s", e)
+        return video_path
+
+
+def _remux_coub_looped_sync(path: str) -> str:
+    """Если в одном файле видео короче аудио — зациклить видео до конца звука.
+
+    Если аудио уже обрезано при merge с -c copy, восстановить его нельзя;
+    тогда нужен повторный download с правильным Merger (см. download_ytdlp).
+    """
+    import subprocess
+
+    if not path or not os.path.isfile(path):
         return path
+
+    ffmpeg = _ffmpeg_bin()
+    base, ext = os.path.splitext(path)
+    out = f"{base}_coubloop{ext or '.mp4'}"
+
+    # Достаём аудио во временный файл и мержим с looped video —
+    # надёжнее, чем два -i одного файла + copy.
+    audio_tmp = f"{base}_coubaudio.m4a"
+    try:
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                path,
+                "-vn",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                audio_tmp,
+            ],
+            check=True,
+            capture_output=True,
+            timeout=180,
+            text=True,
+            **subprocess_no_window_kwargs(),
+        )
+        vdur = _probe_media_duration(path)
+        adur = _probe_media_duration(audio_tmp)
+        if adur > 0.5 and vdur > 0 and adur <= vdur + 0.75:
+            # звук не длиннее ролика — loop не нужен (или аудио уже обрезано)
+            log.info(
+                "coub remux: skip loop (video=%.1fs audio=%.1fs)",
+                vdur,
+                adur,
+            )
+            return path
+
+        merged = merge_coub_looped(path, audio_tmp, out)
+        if merged == out and os.path.isfile(out):
+            os.replace(out, path)
+            log.info("coub remux: ok %s (audio=%.1fs)", os.path.basename(path), adur)
+            return path
     except subprocess.CalledProcessError as e:
         log.warning("coub remux: %s", (e.stderr or e.stdout or str(e)).strip())
     except Exception as e:
         log.warning("coub remux: %s", e)
-        if os.path.isfile(out):
-            try:
-                os.remove(out)
-            except OSError:
-                pass
-        return path
+    finally:
+        for p in (audio_tmp, out):
+            if p and os.path.isfile(p) and os.path.abspath(p) != os.path.abspath(path):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
     return path
 
 

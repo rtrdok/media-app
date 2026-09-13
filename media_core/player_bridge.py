@@ -14,6 +14,7 @@ _state: dict = {
     "duration": 0.0,
     "volume": 0.85,
     "has_track": False,
+    "thumb": "",
     "updated_at": 0.0,
 }
 _commands: list[dict] = []

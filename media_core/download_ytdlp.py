@@ -358,9 +358,29 @@ def _ytdlp_format(url: str, audio_only: bool, format_override: str | None) -> st
 
 
 def _coub_merge_postprocessor_args() -> dict[str, list[str]]:
+    """Цикл видео до конца аудио.
+
+    Важно: -stream_loop не работает с -c copy (Merger по умолчанию),
+    поэтому явно перекодируем.
+    """
     return {
+        # i1 = первый вход (видео) в нумерации yt-dlp
         "Merger+ffmpeg_i1": ["-stream_loop", "-1"],
-        "Merger+ffmpeg_o1": ["-shortest", "-shortest_buf_duration", "0"],
+        "Merger+ffmpeg_o1": [
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+        ],
     }
 
 

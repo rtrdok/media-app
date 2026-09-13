@@ -176,6 +176,7 @@ export function publishPlayerState(body: {
   duration?: number
   volume?: number
   has_track?: boolean
+  thumb?: string
 }) {
   return fetch("/api/player/publish", {
     method: "POST",

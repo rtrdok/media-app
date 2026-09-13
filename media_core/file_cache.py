@@ -37,7 +37,7 @@ def cache_key(
         (container or "").lower(),
     ]
     if not audio_only and detect_platform(url.strip()) == "coub":
-        parts.append("loop2")
+        parts.append("loop3")
     raw = "|".join(parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

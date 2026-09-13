@@ -1110,6 +1110,7 @@ class PlayerPublishIn(BaseModel):
     duration: float | None = None
     volume: float | None = None
     has_track: bool | None = None
+    thumb: str | None = None
 
 
 @app.post("/api/player/publish")
@@ -1165,21 +1166,26 @@ async def mini_page():
 <style>
   html,body{margin:0;height:100%;overflow:hidden;font-family:Segoe UI,system-ui,sans-serif;
     background:#0f172a;color:#f8fafc;user-select:none}
-  .bar{display:flex;align-items:center;gap:8px;height:100%;padding:6px 10px;box-sizing:border-box;
+  .bar{display:flex;align-items:center;gap:10px;height:100%;padding:8px 12px;box-sizing:border-box;
     -webkit-app-region:drag;app-region:drag}
   .nodrag{-webkit-app-region:no-drag;app-region:no-drag;display:flex;align-items:center;gap:6px}
+  .cover{width:48px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0;background:#1e293b;
+    border:1px solid rgba(255,255,255,.12);-webkit-app-region:drag;app-region:drag}
+  .cover.ph{display:flex;align-items:center;justify-content:center;color:#64748b;font-size:18px}
   .btn{-webkit-app-region:no-drag;app-region:no-drag;border:0;background:transparent;color:#e2e8f0;cursor:pointer;
-    width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:12px}
+    width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:14px}
   .btn:hover{background:rgba(255,255,255,.08)}
-  .play{background:#14b8a6;color:#fff;border-radius:999px;width:32px;height:32px}
+  .play{background:#14b8a6;color:#fff;border-radius:999px;width:40px;height:40px;font-size:15px}
   .play:hover{filter:brightness(1.08)}
   .meta{min-width:0;flex:1;-webkit-app-region:drag;app-region:drag}
-  .title{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .artist{font-size:10px;opacity:.65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .vol{-webkit-app-region:no-drag;app-region:no-drag;width:88px;height:18px;accent-color:#14b8a6;cursor:pointer}
+  .title{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25}
+  .artist{font-size:11px;opacity:.65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25;margin-top:2px}
+  .vol{-webkit-app-region:no-drag;app-region:no-drag;width:100px;height:20px;accent-color:#14b8a6;cursor:pointer}
   .x{opacity:.7}
 </style></head><body>
 <div class="bar">
+  <img class="cover" id="cover" alt="" hidden/>
+  <div class="cover ph" id="coverph" aria-hidden="true">♪</div>
   <div class="nodrag">
     <button class="btn" id="prev" title="Предыдущий">&#9198;</button>
     <button class="btn play" id="toggle" title="Play/Pause">&#9654;</button>
@@ -1200,6 +1206,7 @@ function ctrl(action,value){
 const title=document.getElementById('title'), artist=document.getElementById('artist');
 const toggle=document.getElementById('toggle'), vol=document.getElementById('vol');
 const volwrap=document.getElementById('volwrap');
+const cover=document.getElementById('cover'), coverph=document.getElementById('coverph');
 function blockDrag(e){e.stopPropagation()}
 ;['pointerdown','mousedown','touchstart'].forEach(ev=>{
   volwrap.addEventListener(ev, blockDrag, true);
@@ -1220,6 +1227,17 @@ document.getElementById('close').onclick=async()=>{
   await j('/api/window/mini_player',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({enable:false})});
 };
+function setCover(url){
+  if(url){
+    cover.src=url;
+    cover.hidden=false;
+    coverph.style.display='none';
+  }else{
+    cover.removeAttribute('src');
+    cover.hidden=true;
+    coverph.style.display='flex';
+  }
+}
 async function tick(){
   try{
     const s=await j('/api/player/state');
@@ -1227,6 +1245,7 @@ async function tick(){
     artist.textContent=s.artist||'';
     toggle.textContent=s.playing?'❚❚':'▶';
     if(typeof s.volume==='number' && Math.abs(s.volume-Number(vol.value))>0.04) vol.value=s.volume;
+    setCover(s.thumb||'');
   }catch(e){}
 }
 setInterval(tick,500); tick();

@@ -300,10 +300,10 @@ def main() -> None:
                         user32 = ctypes.windll.user32
                         sw = int(user32.GetSystemMetrics(0))
                         sh = int(user32.GetSystemMetrics(1))
-                        mini.move(max(0, sw - 580), max(0, sh - 100))
+                        mini.move(max(0, sw - 640), max(0, sh - 120))
                     except Exception:
                         pass
-                    mini.resize(560, 56)
+                    mini.resize(620, 68)
                     mini.on_top = True
                     mini.show()
                     # главное скрываем — аудио продолжает играть в скрытом WebView
@@ -384,8 +384,8 @@ def main() -> None:
         mini = webview.create_window(
             "Media App",
             f"http://{HOST}:{PORT}/mini",
-            width=560,
-            height=56,
+            width=620,
+            height=68,
             on_top=True,
             frameless=True,
             easy_drag=True,

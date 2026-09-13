@@ -231,12 +231,13 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         duration: el?.duration && Number.isFinite(el.duration) ? el.duration : 0,
         volume: volumeRef.current,
         has_track: true,
+        thumb: player?.thumb || "",
       })
     }
     publish()
     const id = window.setInterval(publish, 500)
     return () => window.clearInterval(id)
-  }, [hasSrc, miniPlayer, player?.title, player?.artist, playing, volume])
+  }, [hasSrc, miniPlayer, player?.title, player?.artist, player?.thumb, playing, volume])
 
   useEffect(() => {
     if (!hasSrc || !miniPlayer) return
