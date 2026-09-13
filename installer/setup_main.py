@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 
 APP_NAME = "Media App"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 TARGET = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "MediaApp"
 START_MENU = (
     Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
@@ -197,7 +197,24 @@ def _do_install(desktop: bool, status) -> tuple[bool, str]:
         except OSError:
             pass
 
+# после распаковки installer тоже снимаем MOTW
     status("Ярлыки…")
+    try:
+        subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"Get-ChildItem -LiteralPath '{TARGET}' -Recurse -Include *.dll,*.exe,*.pyd "
+                f"| Unblock-File -ErrorAction SilentlyContinue",
+            ],
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+    except Exception:
+        pass
+
     START_MENU.mkdir(parents=True, exist_ok=True)
     _create_shortcut(START_MENU / f"{APP_NAME}.lnk", exe, TARGET)
     unbat = _write_uninstall(exe)

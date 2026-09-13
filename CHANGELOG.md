@@ -3,6 +3,12 @@
 All notable changes to Media App are documented here.  
 Кратко для пользователей: что нового в каждом релизе.
 
+## [1.3.1] — 2026-09-13
+
+### Fixed / Исправлено
+- **RU:** Запуск после скачивания ZIP с GitHub (ошибка `Python.Runtime.Loader.Initialize`) — автоснятие блокировки Windows  
+  **EN:** Launch after downloading ZIP from GitHub (`Python.Runtime.Loader.Initialize`) — auto-clear Mark of the Web
+
 ## [1.3.0] — 2026-09-13
 
 ### Added / Добавлено

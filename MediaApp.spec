@@ -36,6 +36,9 @@ hiddenimports = (
         "media_core.library",
         "media_core.backup",
         "media_core.updater",
+        "clr_loader",
+        "pythonnet",
+        "clr",
         "dotenv",
     ]
 )
@@ -68,7 +71,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(ROOT / "hooks" / "rthook_unblock_dlls.py")],
     excludes=["customtkinter", "tkinter.test"],
     noarchive=False,
 )

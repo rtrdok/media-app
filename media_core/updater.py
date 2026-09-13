@@ -217,6 +217,12 @@ Get-ChildItem -LiteralPath $target -Force | ForEach-Object {{
   }}
 }}
 Copy-Item -Path (Join-Path $src "*") -Destination $target -Recurse -Force
+# Снять Mark-of-the-Web с DLL (иначе pythonnet/pywebview не стартует)
+Get-ChildItem -LiteralPath $target -Recurse -Include *.dll,*.exe,*.pyd -ErrorAction SilentlyContinue | ForEach-Object {{
+  Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue
+  $ads = $_.FullName + ":Zone.Identifier"
+  if (Test-Path -LiteralPath $ads) {{ Remove-Item -LiteralPath $ads -Force -ErrorAction SilentlyContinue }}
+}}
 foreach ($name in $preserve) {{
   $b = Join-Path $backup $name
   if (Test-Path $b) {{
