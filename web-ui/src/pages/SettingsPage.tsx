@@ -417,7 +417,8 @@ export function SettingsPage() {
                   Discord Rich Presence
                 </Label>
                 <p className="text-muted-foreground text-xs">
-                  Показывать трек в профиле Discord («Listening to Media App»). Нужен Discord на этом ПК.
+                  Трек в профиле Discord. Если Discord запущен от администратора — при первом Play
+                  подтверди UAC (агент RPC); дальше работает само.
                 </p>
               </div>
               <Switch

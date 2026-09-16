@@ -38,6 +38,7 @@ hiddenimports = (
         "media_core.updater",
         "media_core.lyrics",
         "media_core.discord_rpc",
+        "media_core.discord_rpc_agent",
         "pypresence",
         "clr_loader",
         "pythonnet",

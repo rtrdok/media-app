@@ -1,17 +1,21 @@
 """Discord Rich Presence: «Listening to Media App» при воспроизведении.
 
-pypresence + FastAPI: работа только в отдельном потоке со своим asyncio loop.
-WinError 5 часто из‑за Discord «от имени администратора» — ретраи + подсказка.
+Если Discord от администратора — локальный IPC даёт WinError 5.
+Тогда поднимаем elevated-агент (UAC один раз) и шлём статус по localhost.
 """
 
 from __future__ import annotations
 
-import asyncio
+import json
 import queue
+import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from typing import Any
 
+from media_core.discord_rpc_agent import AGENT_URL
 from media_core.logging_setup import log
 
 _q: queue.Queue = queue.Queue(maxsize=8)
@@ -19,6 +23,9 @@ _worker: threading.Thread | None = None
 _worker_lock = threading.Lock()
 _warned_no_id = False
 _fail_count = 0
+_use_agent = False
+_agent_launch_attempted = False
+_agent_launch_ts = 0.0
 
 
 def _client_id() -> str:
@@ -46,6 +53,93 @@ def _clip(s: str, n: int = 120) -> str:
     return t[: n - 1] + "…"
 
 
+def _is_access_denied(exc: BaseException) -> bool:
+    winerr = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+    msg = str(exc).lower()
+    return winerr == 5 or "access is denied" in msg or "отказано" in msg or "access denied" in msg
+
+
+def _agent_healthy() -> bool:
+    try:
+        with urllib.request.urlopen(f"{AGENT_URL}/health", timeout=0.6) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        data = json.loads(raw)
+        return bool(data.get("ok"))
+    except Exception:
+        return False
+
+
+def _launch_elevated_agent() -> bool:
+    """UAC: MediaApp.exe --discord-rpc-agent (или python main.py …)."""
+    global _agent_launch_attempted, _agent_launch_ts
+    now = time.time()
+    if _agent_launch_attempted and (now - _agent_launch_ts) < 45:
+        return _agent_healthy()
+    _agent_launch_attempted = True
+    _agent_launch_ts = now
+
+    if _agent_healthy():
+        return True
+
+    try:
+        from pathlib import Path
+
+        import ctypes
+
+        if getattr(sys, "frozen", False):
+            exe = sys.executable
+            params = "--discord-rpc-agent"
+            cwd = str(Path(sys.executable).resolve().parent)
+        else:
+            root = Path(__file__).resolve().parent.parent
+            exe = sys.executable
+            params = f'"{root / "main.py"}" --discord-rpc-agent'
+            cwd = str(root)
+
+        rc = int(
+            ctypes.windll.shell32.ShellExecuteW(
+                None,
+                "runas",
+                exe,
+                params,
+                cwd,
+                0,  # SW_HIDE
+            )
+        )
+        if rc <= 32:
+            log.warning("Discord RPC agent UAC launch failed (code %s)", rc)
+            return False
+        log.info("Discord RPC: запрошен elevated-агент (подтверди UAC)")
+        for _ in range(40):
+            time.sleep(0.25)
+            if _agent_healthy():
+                log.info("Discord RPC agent is up")
+                return True
+        log.warning("Discord RPC agent не ответил — UAC отклонён или агент не стартовал")
+        return False
+    except Exception as e:
+        log.warning("Discord RPC agent launch error: %s", e)
+        return False
+
+
+def _post_agent(path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        f"{AGENT_URL}{path}",
+        data=raw,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.URLError:
+        return None
+    except Exception as e:
+        log.warning("Discord RPC agent POST failed: %s", e)
+        return None
+
+
 def _close_rpc(rpc) -> None:
     if rpc is None:
         return
@@ -59,12 +153,11 @@ def _close_rpc(rpc) -> None:
         pass
 
 
-def _connect(cid: str):
-    """Подключение в текущем потоке; у потока должен быть свой event loop."""
+def _connect_local(cid: str):
     from pypresence import Presence
 
     last_err: Exception | None = None
-    for attempt in range(1, 6):
+    for attempt in range(1, 4):
         rpc = None
         try:
             rpc = Presence(cid)
@@ -73,18 +166,16 @@ def _connect(cid: str):
         except Exception as e:
             last_err = e
             _close_rpc(rpc)
-            # Access denied / pipe busy — подождать и ещё раз
-            winerr = getattr(e, "winerror", None) or getattr(e, "errno", None)
-            msg = str(e).lower()
-            retryable = winerr in (5, 32, 231) or "access" in msg or "pipe" in msg or "denied" in msg
-            if not retryable or attempt >= 5:
+            if _is_access_denied(e):
                 break
-            time.sleep(0.6 * attempt)
+            if attempt >= 3:
+                break
+            time.sleep(0.4 * attempt)
     assert last_err is not None
     raise last_err
 
 
-def _push_update(rpc, state: dict[str, Any]) -> None:
+def _push_local(rpc, state: dict[str, Any], cid: str) -> None:
     from pypresence.types import ActivityType, StatusDisplayType
 
     has_track = bool(state.get("has_track"))
@@ -92,7 +183,6 @@ def _push_update(rpc, state: dict[str, Any]) -> None:
     title = _clip(str(state.get("title") or "Трек"))
     artist = _clip(str(state.get("artist") or ""))
     kind = str(state.get("kind") or "audio").lower()
-    thumb = str(state.get("thumb") or "").strip()
     try:
         current = float(state.get("current") or 0)
     except (TypeError, ValueError):
@@ -112,9 +202,8 @@ def _push_update(rpc, state: dict[str, Any]) -> None:
     now = time.time()
     start_ts = int(now - max(0.0, current)) if playing else None
     end_ts = None
-    if playing and duration and duration > 1 and current < duration and start_ts is not None:
+    if playing and duration > 1 and current < duration and start_ts is not None:
         end_ts = int(start_ts + duration)
-
     is_video = kind == "video"
     kwargs: dict[str, Any] = {
         "activity_type": ActivityType.WATCHING if is_video else ActivityType.LISTENING,
@@ -128,17 +217,24 @@ def _push_update(rpc, state: dict[str, Any]) -> None:
         kwargs["start"] = start_ts
     if end_ts is not None:
         kwargs["end"] = end_ts
-    # Обложки по URL Discord часто отвергает — не мешаем статусу
-    try:
-        rpc.update(**kwargs)
-    except Exception:
-        raise
+    rpc.update(**kwargs)
+
+
+def _sync_via_agent(state: dict[str, Any], cid: str) -> bool:
+    if not _agent_healthy():
+        if not _launch_elevated_agent():
+            return False
+    payload = dict(state)
+    payload["client_id"] = cid
+    res = _post_agent("/sync", payload)
+    return bool(res and res.get("ok"))
 
 
 def _worker_main() -> None:
-    global _warned_no_id, _fail_count
+    global _warned_no_id, _fail_count, _use_agent
 
-    # Свой loop — иначе pypresence цепляется к FastAPI и падает
+    import asyncio
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -156,6 +252,8 @@ def _worker_main() -> None:
         if item is None:
             _close_rpc(rpc)
             rpc = None
+            if _use_agent:
+                _post_agent("/clear", {})
             try:
                 loop.close()
             except Exception:
@@ -170,6 +268,7 @@ def _worker_main() -> None:
             last_sig = ""
             _warned_no_id = False
             _fail_count = 0
+            # режим агента сохраняем — Discord всё ещё admin
             continue
 
         if cmd != "sync":
@@ -181,6 +280,8 @@ def _worker_main() -> None:
             rpc = None
             connected_id = ""
             last_sig = ""
+            if _use_agent:
+                _post_agent("/clear", {})
             continue
 
         cid = _client_id()
@@ -194,18 +295,19 @@ def _worker_main() -> None:
             continue
 
         has_track = bool(state.get("has_track"))
-        playing = bool(state.get("playing"))
         title = _clip(str(state.get("title") or ""))
         artist = _clip(str(state.get("artist") or ""))
         kind = str(state.get("kind") or "audio").lower()
-        thumb = str(state.get("thumb") or "").strip()
+        playing = bool(state.get("playing"))
         try:
             duration = float(state.get("duration") or 0)
         except (TypeError, ValueError):
             duration = 0.0
 
         if not has_track or not title:
-            if rpc is not None:
+            if _use_agent:
+                _post_agent("/sync", {"client_id": cid, "has_track": False, "title": ""})
+            elif rpc is not None:
                 try:
                     rpc.clear()
                 except Exception:
@@ -216,39 +318,59 @@ def _worker_main() -> None:
             continue
 
         sig = "|".join(
-            [title, artist, kind, "1" if playing else "0", str(int(duration)), thumb[:80], cid]
+            [title, artist, kind, "1" if playing else "0", str(int(duration)), cid, "a" if _use_agent else "l"]
         )
         now = time.time()
-        if sig == last_sig and (now - last_push) < 15 and rpc is not None:
+        if sig == last_sig and (now - last_push) < 15 and (rpc is not None or _use_agent):
             continue
 
         try:
+            if _use_agent or _agent_healthy():
+                _use_agent = True
+                _close_rpc(rpc)
+                rpc = None
+                connected_id = ""
+                if not _sync_via_agent(state, cid):
+                    raise RuntimeError("agent sync failed")
+                last_sig = sig
+                last_push = now
+                _fail_count = 0
+                continue
+
             if rpc is None or connected_id != cid:
                 _close_rpc(rpc)
-                rpc = _connect(cid)
+                rpc = _connect_local(cid)
                 connected_id = cid
-                log.info("Discord RPC connected (%s…)", cid[:6])
+                log.info("Discord RPC connected locally (%s…)", cid[:6])
                 _fail_count = 0
-            _push_update(rpc, state)
+            _push_local(rpc, state, cid)
             last_sig = sig
             last_push = now
         except Exception as e:
             _fail_count += 1
-            winerr = getattr(e, "winerror", None)
-            # Лог: первые 3 раза и потом каждые 10
-            if _fail_count <= 3 or _fail_count % 10 == 0:
-                log.warning("Discord RPC failed (%s): %s", _fail_count, e)
-                if winerr == 5 or "access is denied" in str(e).lower() or "отказано" in str(e).lower():
-                    log.warning(
-                        "Discord RPC: закрой Discord полностью (трей тоже) и запусти "
-                        "БЕЗ «от имени администратора», затем снова Play в Media App"
-                    )
             _close_rpc(rpc)
             rpc = None
             connected_id = ""
             last_sig = ""
-            # пауза перед следующим sync из очереди
-            time.sleep(min(2.0 + _fail_count * 0.3, 8.0))
+
+            if _is_access_denied(e) or (not _use_agent and _fail_count >= 1):
+                # Discord от админа → elevated agent
+                if _fail_count <= 3:
+                    log.warning(
+                        "Discord RPC: локальный IPC недоступен (%s) — "
+                        "запускаю агент с правами администратора (UAC)",
+                        e,
+                    )
+                if _sync_via_agent(state, cid):
+                    _use_agent = True
+                    last_sig = sig
+                    last_push = time.time()
+                    _fail_count = 0
+                    continue
+
+            if _fail_count <= 3 or _fail_count % 10 == 0:
+                log.warning("Discord RPC failed (%s): %s", _fail_count, e)
+            time.sleep(min(1.5 + _fail_count * 0.2, 6.0))
 
 
 def _ensure_worker() -> None:
@@ -275,7 +397,6 @@ def _enqueue(cmd: str, payload: Any = None) -> None:
 
 
 def sync_from_player(state: dict[str, Any]) -> None:
-    """Обновить presence по состоянию плеера (вызывать из publish)."""
     _enqueue("sync", dict(state or {}))
 
 
@@ -284,5 +405,6 @@ def clear_presence() -> None:
 
 
 def on_settings_changed() -> None:
-    """После сохранения настроек — переподключить / выключить."""
+    global _agent_launch_attempted
+    _agent_launch_attempted = False
     _enqueue("reset")

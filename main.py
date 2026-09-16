@@ -599,4 +599,14 @@ if __name__ == "__main__":
     import multiprocessing
 
     multiprocessing.freeze_support()
-    main()
+    if "--discord-rpc-agent" in sys.argv:
+        # Elevated sidecar для Discord RPC (Discord от администратора)
+        try:
+            from media_core.discord_rpc_agent import run_agent
+
+            run_agent()
+        except Exception:
+            log.exception("Discord RPC agent crashed")
+            raise
+    else:
+        main()
