@@ -1,8 +1,10 @@
-"""Графический установщик Media App → выбор папки, ярлыки."""
+"""Графический установщик Media App → выбор папки, ярлыки, обновление на месте."""
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -12,7 +14,7 @@ from pathlib import Path
 from tkinter import filedialog
 
 APP_NAME = "Media App"
-APP_VERSION = "1.5.3"
+APP_VERSION = "1.5.4"
 DEFAULT_TARGET = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "MediaApp"
 START_MENU = (
     Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
@@ -22,6 +24,7 @@ START_MENU = (
     / "Programs"
 )
 DESKTOP = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Desktop"
+META_NAME = "install_meta.json"
 
 
 def _bundle_dir() -> Path:
@@ -44,11 +47,11 @@ def _icon_path() -> Path | None:
     return None
 
 
-def _ps_hidden(command: str, timeout: int = 30) -> None:
+def _ps_hidden(command: str, timeout: int = 30) -> str:
     flags = 0
     if hasattr(subprocess, "CREATE_NO_WINDOW"):
         flags |= subprocess.CREATE_NO_WINDOW
-    subprocess.run(
+    r = subprocess.run(
         [
             "powershell",
             "-NoProfile",
@@ -65,6 +68,7 @@ def _ps_hidden(command: str, timeout: int = 30) -> None:
         check=False,
         creationflags=flags,
     )
+    return (r.stdout or "").strip()
 
 
 def _unblock_tree(root: Path) -> None:
@@ -130,6 +134,81 @@ pause
     return bat
 
 
+def _write_meta(target: Path) -> None:
+    meta = {
+        "app": "MediaApp",
+        "version": APP_VERSION,
+        "install_dir": str(target),
+    }
+    try:
+        (target / META_NAME).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _parse_version(v: str) -> tuple[int, ...]:
+    parts = re.findall(r"\d+", (v or "").strip().lstrip("vV"))
+    if not parts:
+        return (0,)
+    return tuple(int(x) for x in parts[:4])
+
+
+def _read_installed_version(target: Path) -> str:
+    meta = target / META_NAME
+    if meta.is_file():
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+            ver = str(data.get("version") or "").strip()
+            if ver:
+                return ver
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
+    exe = target / "MediaApp.exe"
+    if exe.is_file():
+        # ProductVersion / FileVersion из ресурсов EXE (если прошиты)
+        exe_s = str(exe).replace("'", "''")
+        out = _ps_hidden(
+            f"(Get-Item -LiteralPath '{exe_s}').VersionInfo.ProductVersion; "
+            f"(Get-Item -LiteralPath '{exe_s}').VersionInfo.FileVersion",
+            timeout=15,
+        )
+        for line in (out or "").splitlines():
+            line = line.strip()
+            if re.search(r"\d+\.\d+", line):
+                return line.split(" ")[0].strip()
+    return ""
+
+
+def _shortcut_install_dir() -> Path | None:
+    lnk = START_MENU / f"{APP_NAME}.lnk"
+    if not lnk.is_file():
+        return None
+    lnk_s = str(lnk).replace("'", "''")
+    out = _ps_hidden(
+        f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{lnk_s}'); "
+        "$s.TargetPath",
+        timeout=15,
+    )
+    if not out:
+        return None
+    exe = Path(out.strip().strip('"'))
+    if exe.name.lower() == "mediaapp.exe" and exe.is_file():
+        return exe.parent
+    return None
+
+
+def _find_existing_install() -> tuple[Path | None, str]:
+    """Возвращает (папка, установленная_версия)."""
+    candidates: list[Path] = []
+    for p in (DEFAULT_TARGET, _shortcut_install_dir()):
+        if p and p not in candidates:
+            candidates.append(p)
+    for p in candidates:
+        if (p / "MediaApp.exe").is_file():
+            return p, _read_installed_version(p)
+    return None, ""
+
+
 _PRESERVE = (
     ".env",
     "cookies.txt",
@@ -140,6 +219,7 @@ _PRESERVE = (
     "config",
     "file_cache",
     ".migrated_from_install",
+    META_NAME,
 )
 
 
@@ -211,6 +291,7 @@ def _do_install(target: Path, desktop: bool, status) -> tuple[bool, str]:
         shutil.move(str(src), str(target))
         _restore_userdata(userdata_bak, target)
         userdata_bak = None
+        _write_meta(target)
     except Exception as e:
         if userdata_bak:
             try:
@@ -259,8 +340,8 @@ def run_gui() -> int:
     root = tk.Tk()
     root.title(f"{APP_NAME} — установка")
     root.resizable(False, False)
-    root.minsize(480, 380)
-    root.geometry("500x400")
+    root.minsize(500, 420)
+    root.geometry("520x440")
 
     ico = _icon_path()
     if ico and ico.suffix.lower() == ".ico":
@@ -269,17 +350,50 @@ def run_gui() -> int:
         except Exception:
             pass
 
-    # шапка + контент + кнопки всегда внизу (не обрезаются)
+    existing_dir, existing_ver = _find_existing_install()
+    is_update = bool(existing_dir and (existing_dir / "MediaApp.exe").is_file())
+    same_or_newer = False
+    if is_update and existing_ver:
+        same_or_newer = _parse_version(existing_ver) >= _parse_version(APP_VERSION)
+
     outer = ttk.Frame(root, padding=16)
     outer.pack(fill="both", expand=True)
 
     ttk.Label(outer, text=APP_NAME, font=("Segoe UI", 18, "bold")).pack(anchor="w")
-    ttk.Label(outer, text=f"Версия {APP_VERSION}", font=("Segoe UI", 10)).pack(anchor="w", pady=(2, 10))
+    ttk.Label(outer, text=f"Установщик версии {APP_VERSION}", font=("Segoe UI", 10)).pack(
+        anchor="w", pady=(2, 8)
+    )
+
+    info_var = tk.StringVar()
+    if is_update:
+        ver_txt = existing_ver or "неизвестна"
+        if same_or_newer:
+            info_var.set(
+                f"Уже установлено: v{ver_txt}\n"
+                f"Папка: {existing_dir}\n\n"
+                f"Эта или более новая версия уже стоит. Можно переустановить поверх "
+                f"(настройки и история сохранятся)."
+            )
+        else:
+            info_var.set(
+                f"Найдена установка: v{ver_txt}\n"
+                f"Папка: {existing_dir}\n\n"
+                f"Нажми «Обновить» — поставим {APP_VERSION} в ту же папку.\n"
+                f"Настройки, cookies и история сохранятся."
+            )
+    else:
+        info_var.set(
+            "Media App ещё не найден на этом ПК.\n"
+            "Выбери папку или оставь путь по умолчанию."
+        )
+
+    info_lbl = ttk.Label(outer, textvariable=info_var, justify="left", wraplength=470)
+    info_lbl.pack(anchor="w", pady=(0, 10))
 
     ttk.Label(outer, text="Папка установки").pack(anchor="w")
     path_row = ttk.Frame(outer)
     path_row.pack(fill="x", pady=(4, 8))
-    path_var = tk.StringVar(value=str(DEFAULT_TARGET))
+    path_var = tk.StringVar(value=str(existing_dir or DEFAULT_TARGET))
     path_entry = ttk.Entry(path_row, textvariable=path_var)
     path_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
 
@@ -294,21 +408,16 @@ def run_gui() -> int:
     browse_btn = ttk.Button(path_row, text="Обзор…", command=browse, width=10)
     browse_btn.pack(side="right")
 
-    ttk.Label(
-        outer,
-        text="Всё нужное уже внутри (ffmpeg и библиотеки).\nPATH и доп. зависимости не требуются.",
-        justify="left",
-    ).pack(anchor="w", pady=(4, 10))
-
-    desk_var = tk.BooleanVar(value=True)
+    desk_var = tk.BooleanVar(value=not is_update)
     ttk.Checkbutton(outer, text="Ярлык на рабочем столе", variable=desk_var).pack(anchor="w")
 
-    status_var = tk.StringVar(value="Готов к установке")
+    status_var = tk.StringVar(
+        value="Готов к обновлению" if is_update and not same_or_newer else "Готов к установке"
+    )
     ttk.Label(outer, textvariable=status_var).pack(anchor="w", pady=(14, 4))
-    bar = ttk.Progressbar(outer, mode="indeterminate", length=440)
+    bar = ttk.Progressbar(outer, mode="indeterminate", length=460)
     bar.pack(fill="x")
 
-    # кнопки — отдельная нижняя полоса
     btns = ttk.Frame(outer)
     btns.pack(fill="x", side="bottom", pady=(18, 0))
 
@@ -320,10 +429,11 @@ def run_gui() -> int:
         bar.stop()
         if ok:
             status_var.set("Готово")
+            action = "Обновлено" if is_update else "Установлено"
             messagebox.showinfo(
                 APP_NAME,
-                f"Установлено в:\n{detail}\n\nМеню Пуск: ярлык и удаление.\n"
-                "Автозапуск — в настройках приложения.",
+                f"{action} в:\n{detail}\n\nВерсия {APP_VERSION}.\n"
+                "Меню Пуск: ярлык и удаление.\nАвтозапуск — в настройках приложения.",
             )
             if messagebox.askyesno(APP_NAME, "Запустить Media App сейчас?"):
                 subprocess.Popen(
@@ -346,16 +456,39 @@ def run_gui() -> int:
             messagebox.showwarning(APP_NAME, "Укажите папку установки")
             return
         target = Path(raw)
-        if target.exists() and not messagebox.askyesno(
-            APP_NAME, f"Папка уже есть:\n{target}\n\nПерезаписать?"
-        ):
-            return
+        exe_exists = (target / "MediaApp.exe").is_file()
+
+        if exe_exists:
+            cur = _read_installed_version(target) or "?"
+            if _parse_version(cur) >= _parse_version(APP_VERSION) and cur != "?":
+                if not messagebox.askyesno(
+                    APP_NAME,
+                    f"Уже установлена версия {cur} (установщик: {APP_VERSION}).\n\n"
+                    f"Переустановить поверх в:\n{target}\n\n"
+                    "Настройки и история сохранятся.",
+                ):
+                    return
+            elif not messagebox.askyesno(
+                APP_NAME,
+                f"Обновить Media App до {APP_VERSION}?\n\n"
+                f"Папка: {target}\n"
+                f"Сейчас: {cur}\n\n"
+                "Настройки, cookies и история сохранятся.",
+            ):
+                return
+        elif target.exists() and any(target.iterdir()):
+            if not messagebox.askyesno(
+                APP_NAME,
+                f"Папка уже есть и не похожа на Media App:\n{target}\n\nПродолжить?",
+            ):
+                return
+
         install_btn.configure(state="disabled")
         cancel_btn.configure(state="disabled")
         browse_btn.configure(state="disabled")
         path_entry.configure(state="disabled")
         bar.start(12)
-        set_status("Установка…")
+        set_status("Обновление…" if exe_exists else "Установка…")
 
         def worker() -> None:
             ok, detail = _do_install(target, desk_var.get(), lambda t: root.after(0, set_status, t))
@@ -363,7 +496,10 @@ def run_gui() -> int:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    install_btn = ttk.Button(btns, text="Установить", command=start_install)
+    btn_text = "Обновить" if is_update and not same_or_newer else (
+        "Переустановить" if same_or_newer else "Установить"
+    )
+    install_btn = ttk.Button(btns, text=btn_text, command=start_install)
     install_btn.pack(side="left", ipadx=12, ipady=4)
     cancel_btn = ttk.Button(btns, text="Отмена", command=root.destroy)
     cancel_btn.pack(side="right", ipadx=8, ipady=4)

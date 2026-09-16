@@ -28,6 +28,7 @@ _PRESERVE_NAMES = {
     "media_app.log",
     "config",
     "file_cache",
+    "install_meta.json",
 }
 
 _job_lock = threading.Lock()
