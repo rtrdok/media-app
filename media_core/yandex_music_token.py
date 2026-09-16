@@ -42,7 +42,7 @@ async def get_yandex_music_token() -> str | None:
             return cached[0]
 
     try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True, trust_env=False) as client:
             x_resp = await client.post(
                 "https://mobileproxy.passport.yandex.net/1/bundle/oauth/token_by_sessionid",
                 params={"app_id": "ru.yandex.mobile.music"},

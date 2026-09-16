@@ -186,7 +186,7 @@ async def materialize_preview(page_url: str) -> dict[str, Any] | None:
                     "Accept": "*/*",
                 }
                 async with httpx.AsyncClient(
-                    timeout=120, follow_redirects=True, proxy=httpx_proxy()
+                    timeout=120, follow_redirects=True, trust_env=False, proxy=httpx_proxy()
                 ) as client:
                     async with client.stream("GET", str(info["stream_url"]), headers=headers) as resp:
                         resp.raise_for_status()

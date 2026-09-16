@@ -22,6 +22,7 @@ import {
   extensionSave,
   saveSettings,
   updateStatus,
+  ytdlpUpdate,
 } from "@/lib/api"
 import type { AppSettings } from "@/types"
 
@@ -38,6 +39,8 @@ export function SettingsPage() {
   const [updOk, setUpdOk] = useState(true)
   const [cookieOk, setCookieOk] = useState(false)
   const [extMsg, setExtMsg] = useState("")
+  const [ytdlpMsg, setYtdlpMsg] = useState("")
+  const [ytdlpBusy, setYtdlpBusy] = useState(false)
   const dirtyRef = useRef(false)
   const pollRef = useRef(0)
 
@@ -150,6 +153,23 @@ export function SettingsPage() {
       setUpdOk(false)
       setUpdMsg(e instanceof Error ? e.message : String(e))
       setUpdBusy(false)
+    }
+  }
+
+  async function onYtdlpUpdate() {
+    setYtdlpBusy(true)
+    setYtdlpMsg("Обновление yt-dlp…")
+    try {
+      const j = await ytdlpUpdate()
+      setYtdlpMsg(
+        j.ok
+          ? `yt-dlp обновлён: ${j.version || "ok"}. Настройки Media App не трогались.`
+          : j.log || "Не удалось обновить yt-dlp",
+      )
+    } catch (e) {
+      setYtdlpMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setYtdlpBusy(false)
     }
   }
 
@@ -285,8 +305,8 @@ export function SettingsPage() {
                 </Label>
                 <p className="text-muted-foreground text-xs">
                   Для друзей из РФ и других регионов, где YouTube / сервисы недоступны.
-                  Прокси применяется ко всем загрузкам (не только yt-dlp): сначала прокси из
-                  списка, затем прямое соединение.
+                  Прокси приложения — только из списка ниже. Системный VPN Windows не
+                  трогаем и при выключенном переключателе не используем.
                 </p>
               </div>
               <Switch
@@ -331,6 +351,78 @@ export function SettingsPage() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex items-center justify-between gap-8">
+              <div>
+                <Label className="mb-1 block">Лимит скорости</Label>
+                <p className="text-muted-foreground text-xs">Пусто = без лимита. Примеры: 2M, 500K</p>
+              </div>
+              <input
+                value={draft.rate_limit || ""}
+                onChange={(e) => patch({ rate_limit: e.target.value })}
+                placeholder="например 2M"
+                className="border-input bg-background w-56 rounded-lg border px-3 py-2 text-sm"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-8">
+              <Label htmlFor="tray">Сворачивать в трей при закрытии окна</Label>
+              <Switch
+                id="tray"
+                checked={!!draft.minimize_to_tray}
+                onCheckedChange={(v) => patch({ minimize_to_tray: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-8">
+              <Label htmlFor="notify">Уведомление Windows, когда загрузка готова</Label>
+              <Switch
+                id="notify"
+                checked={!!draft.notify_on_done}
+                onCheckedChange={(v) => patch({ notify_on_done: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-8">
+              <div>
+                <Label className="mb-1 block">Хранить кэш превью (дней)</Label>
+                <p className="text-muted-foreground text-xs">Старые временные файлы удаляются автоматически</p>
+              </div>
+              <Select
+                value={String(draft.cache_max_days ?? 7)}
+                onValueChange={(v) => patch({ cache_max_days: Number(v) })}
+              >
+                <SelectTrigger className="w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[3, 7, 14, 30, 90].map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-xl pt-6 pr-6 pb-6 pl-6">
+          <CardHeader className="p-0 pb-4">
+            <CardTitle className="text-lg">yt-dlp</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 p-0">
+            <p className="text-muted-foreground text-sm">
+              Обновляет только движок скачивания. Прокси, cookies, папка загрузок и остальные
+              настройки Media App не сбрасываются.
+            </p>
+            {ytdlpMsg ? <p className="text-sm">{ytdlpMsg}</p> : null}
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              disabled={ytdlpBusy}
+              onClick={() => void onYtdlpUpdate()}
+            >
+              <RefreshCw className="size-3.5" />
+              {ytdlpBusy ? "Обновление…" : "Обновить yt-dlp"}
+            </Button>
           </CardContent>
         </Card>
 
@@ -357,12 +449,7 @@ export function SettingsPage() {
                         />
                       </div>
                       <p className="text-muted-foreground mt-1 text-xs tabular-nums">
-                        {updPct > 0
-                          ? `${updPct}%`
-                          : updMsg.toLowerCase().includes("прокси") ||
-                              updMsg.toLowerCase().includes("напрямую")
-                            ? "Подключение (если долго — проверьте VPN)…"
-                            : "Подключение…"}
+                        {updPct > 0 ? `${updPct}%` : "Подключение…"}
                       </p>
                     </div>
                   ) : null}

@@ -40,7 +40,7 @@ def _clean_text(s: str) -> str:
 
 
 def _mobile_client(cookies_header: str | None = None) -> httpx.AsyncClient:
-    from media_core.net_proxy import httpx_proxy
+    from media_core.net_proxy import httpx_client_kwargs
 
     jar = load_vk_cookie_jar()
     headers = {
@@ -54,11 +54,12 @@ def _mobile_client(cookies_header: str | None = None) -> httpx.AsyncClient:
     if jar is None and cookies_header:
         headers["Cookie"] = cookies_header
     return httpx.AsyncClient(
-        timeout=45,
-        follow_redirects=True,
-        headers=headers,
-        cookies=jar,
-        proxy=httpx_proxy(),
+        **httpx_client_kwargs(
+            timeout=45,
+            follow_redirects=True,
+            headers=headers,
+            cookies=jar,
+        )
     )
 
 

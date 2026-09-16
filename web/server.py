@@ -1399,12 +1399,17 @@ async def playlist_info(body: PlaylistIn):
 
 @app.post("/api/ytdlp/update")
 async def ytdlp_update():
+    """Обновляет только пакет yt-dlp. Настройки Media App (config/app_settings.json) не трогает."""
     import subprocess
     import sys
 
     def _upd():
         if getattr(sys, "frozen", False):
-            return 1, "В .exe обновление yt-dlp ограничено. Пересобери приложение или обнови через python -m pip install -U yt-dlp"
+            return (
+                1,
+                "В установленной .exe yt-dlp обновляется вместе с Media App "
+                "(Настройки → Обновления). Настройки приложения при этом сохраняются.",
+            )
         from media_core.utils import subprocess_no_window_kwargs
 
         r = subprocess.run(

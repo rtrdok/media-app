@@ -373,14 +373,41 @@ export function uploadAnime(file: File) {
 }
 
 export function playlistUrls(url: string) {
-  return json<{ ok: boolean; entries?: { title: string; url: string }[]; error?: string }>(
-    "/api/playlist",
+  return json<{
+    ok: boolean
+    title?: string
+    entries?: { id?: string; title: string; url: string; duration?: number }[]
+    error?: string
+  }>("/api/playlist", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  })
+}
+
+export function libraryDuplicates() {
+  return json<{
+    ok: boolean
+    groups?: { key: string; count: number; items: Record<string, unknown>[] }[]
+    count?: number
+  }>("/api/library/duplicates")
+}
+
+export function libraryOrganize(paths?: string[]) {
+  return json<{ ok: boolean; moved?: unknown[]; count?: number; errors?: unknown[] }>(
+    "/api/library/organize",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ paths: paths || null }),
     },
   )
+}
+
+export function ytdlpUpdate() {
+  return json<{ ok: boolean; version?: string; log?: string }>("/api/ytdlp/update", {
+    method: "POST",
+  })
 }
 
 export type YandexPlaylist = {

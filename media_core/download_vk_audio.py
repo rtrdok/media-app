@@ -618,7 +618,7 @@ async def _fetch_via_web_api(audio_id: str, *, source_url: str | None = None) ->
     cookies = load_vk_cookies()
     if not cookies:
         return None
-    async with httpx.AsyncClient(timeout=25, follow_redirects=True, proxy=httpx_proxy()) as client:
+    async with httpx.AsyncClient(timeout=25, follow_redirects=True, trust_env=False, proxy=httpx_proxy()) as client:
         token, user_id = await _fetch_session_from_feed(client, cookies)
         if not token:
             log.warning("vk web api: no access_token on /feed")
@@ -657,7 +657,7 @@ async def _fetch_via_api(audio_id: str) -> dict[str, Any] | None:
         "v": VK_API_VERSION,
     }
     try:
-        async with httpx.AsyncClient(timeout=20, proxy=httpx_proxy()) as client:
+        async with httpx.AsyncClient(timeout=20, trust_env=False, proxy=httpx_proxy()) as client:
             r = await client.get("https://api.vk.com/method/audio.getById", params=params)
             data = r.json()
     except Exception as e:
@@ -864,6 +864,7 @@ async def _fetch_via_al_audio(audio_id: str, *, source_url: str | None = None) -
     async with httpx.AsyncClient(
         timeout=35,
         follow_redirects=True,
+        trust_env=False,
         headers=client_headers,
         cookies=jar,
         proxy=httpx_proxy(),
@@ -1012,7 +1013,7 @@ async def _download_mp3(
         if cancel_event is not None and cancel_event.is_set():
             return None
         try:
-            with httpx.Client(timeout=120, follow_redirects=True, proxy=httpx_proxy()) as client:
+            with httpx.Client(timeout=120, follow_redirects=True, trust_env=False, proxy=httpx_proxy()) as client:
                 with client.stream("GET", mp3_url, headers=headers) as resp:
                     resp.raise_for_status()
                     ctype = (resp.headers.get("content-type") or "").lower()

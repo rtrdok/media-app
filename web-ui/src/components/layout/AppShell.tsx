@@ -15,6 +15,7 @@ import {
 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import type { PageId } from "@/types"
+import { GlobalSearchModal } from "@/components/GlobalSearchModal"
 import { useApp } from "@/context/AppProvider"
 import { ackNotify, cookiesOpenFolder, cookiesStatus, openPath } from "@/lib/api"
 import { pageLabel, t } from "@/lib/i18n"
@@ -34,8 +35,18 @@ const NAV: { id: PageId; icon: typeof Home }[] = [
 type PanelId = "notify" | "pc" | null
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { page, setPage, state, focusHistorySearch, notifyDot, player, refresh, miniPlayer } =
-    useApp()
+  const {
+    page,
+    setPage,
+    state,
+    openGlobalSearch,
+    closeGlobalSearch,
+    globalSearchOpen,
+    notifyDot,
+    player,
+    refresh,
+    miniPlayer,
+  } = useApp()
   const playerVisible = Boolean(player?.src)
   const videoPlaying =
     playerVisible && (player?.kind === "video" || (player?.src ? isVideoSrc(player.src) : false))
@@ -174,11 +185,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div ref={headerActionsRef} className="relative flex items-center gap-3">
             <button
               type="button"
-              aria-label="Поиск по истории"
-              title="Поиск по истории"
+              aria-label="Глобальный поиск"
+              title="Поиск (Ctrl+K)"
               onClick={() => {
                 setPanel(null)
-                focusHistorySearch()
+                openGlobalSearch()
               }}
               className="text-muted-foreground hover:text-foreground flex size-9 items-center justify-center rounded-lg transition-colors"
             >
@@ -350,6 +361,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
       {/* PlayerBar всегда смонтирован — при мини просто меняет раскладку */}
       <PlayerBar showOnSettings />
+      <GlobalSearchModal open={globalSearchOpen} onClose={closeGlobalSearch} />
     </div>
   )
 }

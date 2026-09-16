@@ -256,9 +256,11 @@ def _probe_video_info_sync(
     extra_cookiefile: str | None = None,
     ignore_cookies: bool = False,
 ) -> dict:
+    from media_core.net_proxy import ytdlp_proxy_opt
+
     ydl_opts = ytdlp_safe_opts(skip_download=True, socket_timeout=20)
-    if proxy:
-        ydl_opts["proxy"] = proxy
+    # всегда явно: иначе yt-dlp берёт системный VPN/PAC и «висит»
+    ydl_opts["proxy"] = ytdlp_proxy_opt(proxy)
     if not ignore_cookies:
         _apply_ytdlp_cookies(
             ydl_opts, url, extra_http_cookie=extra_http_cookie, extra_cookiefile=extra_cookiefile,
@@ -532,8 +534,9 @@ async def download_ytdlp(
                             "already_have_subtitle": False,
                         }]
                         ydl_opts["postprocessors"].append({"key": "FFmpegMetadata"})
-                if proxy:
-                    ydl_opts["proxy"] = proxy
+                from media_core.net_proxy import ytdlp_proxy_opt
+
+                ydl_opts["proxy"] = ytdlp_proxy_opt(proxy)
                 _apply_ytdlp_cookies(
                     ydl_opts, url,
                     extra_http_cookie=extra_http_cookie,

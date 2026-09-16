@@ -1,4 +1,16 @@
-import { Heart, LayoutGrid, List, ListMusic, MoreHorizontal, Plus, Search, Shuffle, Upload } from "lucide-react"
+import {
+  CheckSquare,
+  Copy,
+  Heart,
+  LayoutGrid,
+  List,
+  ListMusic,
+  MoreHorizontal,
+  Plus,
+  Search,
+  Shuffle,
+  Upload,
+} from "lucide-react"
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { AddToPlaylistsModal } from "@/components/library/AddToPlaylistsModal"
 import { AppModal } from "@/components/ui/AppModal"
@@ -23,6 +35,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useApp } from "@/context/AppProvider"
 import {
   fetchLibrary,
+  libraryDuplicates,
+  libraryOrganize,
   libraryPlaylistAddTracks,
   libraryPlaylistCreate,
   libraryPlaylistDelete,
@@ -111,6 +125,17 @@ export function LibraryPage() {
   const [removeBusy, setRemoveBusy] = useState(false)
   const [addPath, setAddPath] = useState<string | null>(null)
   const [addTitle, setAddTitle] = useState<string | undefined>()
+  const [addBatchPaths, setAddBatchPaths] = useState<string[] | null>(null)
+  const [selectMode, setSelectMode] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  const [batchRemoveOpen, setBatchRemoveOpen] = useState(false)
+  const [batchRemoveBusy, setBatchRemoveBusy] = useState(false)
+  const [organizeBusy, setOrganizeBusy] = useState(false)
+  const [dupOpen, setDupOpen] = useState(false)
+  const [dupBusy, setDupBusy] = useState(false)
+  const [dupGroups, setDupGroups] = useState<
+    { key: string; count: number; items: LibItem[] }[]
+  >([])
   const lastDoneRef = useRef("")
 
   const loadPlaylists = useCallback(async () => {
@@ -335,6 +360,122 @@ export function LibraryPage() {
     }
   }
 
+  function toggleSelectMode() {
+    setSelectMode((on) => {
+      if (on) setSelected(new Set())
+      return !on
+    })
+  }
+
+  function toggleSelected(path: string) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  function clearSelection() {
+    setSelected(new Set())
+  }
+
+  async function stopPlayerIfPlaying(paths: string[]) {
+    const playingPath = player?.path || ""
+    const norm = (s: string) => s.replace(/\//g, "\\").toLowerCase()
+    if (!playingPath) return
+    if (paths.some((p) => norm(p) === norm(playingPath))) {
+      closePlayer()
+      await new Promise((r) => window.setTimeout(r, 350))
+    }
+  }
+
+  async function removePathsFromLibrary(paths: string[]) {
+    await stopPlayerIfPlaying(paths)
+    for (const p of paths) {
+      const j = await libraryRemove(p, true)
+      if (!j.ok || j.error) {
+        window.alert(j.error || "Не удалось удалить файл (возможно, он открыт в другом приложении).")
+        return false
+      }
+    }
+    return true
+  }
+
+  async function confirmBatchRemove() {
+    const paths = [...selected]
+    if (!paths.length) return
+    setBatchRemoveBusy(true)
+    try {
+      const ok = await removePathsFromLibrary(paths)
+      if (ok) {
+        setBatchRemoveOpen(false)
+        setSelected(new Set())
+        await load()
+        await loadPlaylists()
+      }
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBatchRemoveBusy(false)
+    }
+  }
+
+  async function organizeSelected() {
+    const paths = [...selected]
+    if (!paths.length) return
+    if (!window.confirm(`Разложить ${paths.length} файл(ов) по папкам артистов?`)) return
+    setOrganizeBusy(true)
+    try {
+      const j = await libraryOrganize(paths)
+      if (!j.ok) {
+        window.alert("Не удалось разложить файлы.")
+        return
+      }
+      setSelected(new Set())
+      await load()
+      await loadPlaylists()
+    } finally {
+      setOrganizeBusy(false)
+    }
+  }
+
+  async function openDuplicates() {
+    setDupBusy(true)
+    try {
+      const j = await libraryDuplicates()
+      if (!j.ok) {
+        window.alert("Не удалось загрузить дубликаты.")
+        return
+      }
+      const groups = (j.groups || []).map((g) => ({
+        key: g.key,
+        count: g.count,
+        items: (g.items || []).map((row) => row as LibItem),
+      }))
+      setDupGroups(groups)
+      setDupOpen(true)
+    } finally {
+      setDupBusy(false)
+    }
+  }
+
+  async function removeDupItem(it: LibItem) {
+    const ok = await removePathsFromLibrary([it.path])
+    if (!ok) return
+    setDupGroups((prev) =>
+      prev
+        .map((g) => ({
+          ...g,
+          items: g.items.filter((x) => x.path !== it.path),
+          count: g.items.filter((x) => x.path !== it.path).length,
+        }))
+        .filter((g) => g.items.length > 1),
+    )
+    await load()
+    await loadPlaylists()
+  }
+
   async function confirmDelete() {
     if (deleteId == null) return
     setDeleteBusy(true)
@@ -348,21 +489,45 @@ export function LibraryPage() {
     }
   }
 
+  function selectionCheckbox(it: LibItem) {
+    if (!selectMode) return null
+    const checked = selected.has(it.path)
+    return (
+      <button
+        type="button"
+        aria-label={checked ? "Снять выбор" : "Выбрать"}
+        className="bg-background/80 hover:bg-background absolute top-3 right-3 flex size-8 items-center justify-center rounded-lg border shadow-sm backdrop-blur-sm"
+        onClick={(e) => {
+          e.stopPropagation()
+          toggleSelected(it.path)
+        }}
+      >
+        <CheckSquare className={cn("size-4", checked ? "text-primary" : "text-muted-foreground")} />
+      </button>
+    )
+  }
+
   function itemCard(it: LibItem, i: number) {
     const isVideo = it.kind === "video"
     return (
       <Card key={it.path} className="overflow-hidden rounded-xl pt-0 pb-0 pl-0 pr-0">
-        <button type="button" className="block w-full text-left" onClick={() => play(it)}>
+        <button
+          type="button"
+          className="block w-full text-left"
+          onClick={() => (selectMode ? toggleSelected(it.path) : play(it))}
+        >
           <div
             className={cn(
               "relative aspect-[8/5] overflow-hidden bg-gradient-to-br",
               !it.cover && COVER_GRAD[i % COVER_GRAD.length],
+              selectMode && selected.has(it.path) && "ring-primary ring-2 ring-inset",
             )}
             style={it.cover ? { backgroundImage: `url(${it.cover})`, backgroundSize: "cover" } : undefined}
           >
             <Badge className="absolute top-3 left-3 bg-background/70 backdrop-blur-sm">
               {isVideo ? "Video" : "Audio"}
             </Badge>
+            {selectionCheckbox(it)}
           </div>
         </button>
         <CardContent className="flex items-start justify-between gap-3 pt-4 pr-4 pb-4 pl-4">
@@ -382,9 +547,28 @@ export function LibraryPage() {
     return (
       <div
         key={it.path}
-        className="hover:bg-muted/50 flex items-center gap-3 rounded-xl px-2 py-2"
+        className={cn(
+          "hover:bg-muted/50 flex items-center gap-3 rounded-xl px-2 py-2",
+          selectMode && selected.has(it.path) && "bg-muted/40 ring-primary ring-1",
+        )}
       >
-        <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => play(it)}>
+        {selectMode ? (
+          <button
+            type="button"
+            aria-label={selected.has(it.path) ? "Снять выбор" : "Выбрать"}
+            className="text-muted-foreground hover:text-foreground flex size-8 shrink-0 items-center justify-center rounded-lg"
+            onClick={() => toggleSelected(it.path)}
+          >
+            <CheckSquare
+              className={cn("size-4", selected.has(it.path) ? "text-primary" : "text-muted-foreground")}
+            />
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          onClick={() => (selectMode ? toggleSelected(it.path) : play(it))}
+        >
           <div
             className={cn(
               "size-12 shrink-0 rounded-lg bg-gradient-to-br",
@@ -547,8 +731,58 @@ export function LibraryPage() {
           <Button variant="secondary" className="h-10" disabled={scanning} onClick={() => void forceScan()}>
             {scanning ? "Скан…" : "Сканировать"}
           </Button>
+          <Button
+            variant={selectMode ? "default" : "outline"}
+            className="h-10 gap-2 rounded-lg"
+            onClick={toggleSelectMode}
+          >
+            <CheckSquare className="size-4" />
+            {selectMode ? "Готово" : "Выбрать"}
+          </Button>
+          <Button
+            variant="outline"
+            className="h-10 gap-2 rounded-lg"
+            disabled={dupBusy}
+            onClick={() => void openDuplicates()}
+          >
+            <Copy className="size-4" />
+            {dupBusy ? "…" : "Дубликаты"}
+          </Button>
         </div>
       </div>
+
+      {selected.size > 0 ? (
+        <div className="bg-background/95 border-border sticky top-0 z-20 mb-4 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 shadow-sm backdrop-blur-sm">
+          <span className="text-muted-foreground mr-1 text-sm tabular-nums">Выбрано: {selected.size}</span>
+          <Button
+            size="sm"
+            className="h-8 rounded-lg"
+            onClick={() => setAddBatchPaths([...selected])}
+          >
+            В плейлист
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            className="h-8 rounded-lg"
+            onClick={() => setBatchRemoveOpen(true)}
+          >
+            Удалить
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            className="h-8 rounded-lg"
+            disabled={organizeBusy}
+            onClick={() => void organizeSelected()}
+          >
+            {organizeBusy ? "…" : "По артистам"}
+          </Button>
+          <Button size="sm" variant="ghost" className="h-8 rounded-lg" onClick={clearSelection}>
+            Снять
+          </Button>
+        </div>
+      ) : null}
 
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <div className="border-input bg-background relative min-w-[220px] flex-1 rounded-xl border">
@@ -749,13 +983,95 @@ export function LibraryPage() {
         <p className="text-muted-foreground text-sm">Действие нельзя отменить.</p>
       </AppModal>
 
+      <AppModal
+        open={batchRemoveOpen}
+        title="Удалить выбранные?"
+        description={`Будет удалено файлов: ${selected.size}. Они исчезнут с диска и из всех плейлистов.`}
+        onClose={() => !batchRemoveBusy && setBatchRemoveOpen(false)}
+        footer={
+          <>
+            <Button variant="ghost" disabled={batchRemoveBusy} onClick={() => setBatchRemoveOpen(false)}>
+              Отмена
+            </Button>
+            <Button variant="destructive" disabled={batchRemoveBusy} onClick={() => void confirmBatchRemove()}>
+              Удалить
+            </Button>
+          </>
+        }
+      >
+        <p className="text-muted-foreground text-sm">Действие нельзя отменить.</p>
+      </AppModal>
+
+      <AppModal
+        open={dupOpen}
+        title="Дубликаты"
+        description="Группы с одинаковыми названием и исполнителем."
+        onClose={() => !dupBusy && setDupOpen(false)}
+        footer={
+          <Button variant="ghost" onClick={() => setDupOpen(false)}>
+            Закрыть
+          </Button>
+        }
+        className="max-w-2xl"
+      >
+        {dupGroups.length === 0 ? (
+          <p className="text-muted-foreground text-sm">Дубликатов не найдено.</p>
+        ) : (
+          <div className="max-h-[min(60vh,28rem)] space-y-4 overflow-y-auto pr-1">
+            {dupGroups.map((g) => (
+              <div key={g.key} className="border-border rounded-xl border p-3">
+                <p className="mb-2 text-sm font-medium">
+                  {g.key}{" "}
+                  <span className="text-muted-foreground font-normal">· {g.count}</span>
+                </p>
+                <ul className="space-y-2">
+                  {g.items.map((it) => (
+                    <li
+                      key={it.path}
+                      className="bg-muted/40 flex flex-wrap items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm"
+                    >
+                      <span className="min-w-0 flex-1 truncate" title={it.path}>
+                        {it.title || it.path}
+                      </span>
+                      <div className="flex shrink-0 gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 rounded-lg px-2 text-xs"
+                          onClick={() => {
+                            const folder = it.path.replace(/[\\/][^\\/]+$/, "")
+                            void openPath(folder || it.path)
+                          }}
+                        >
+                          Папка
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          className="h-7 rounded-lg px-2 text-xs"
+                          onClick={() => void removeDupItem(it)}
+                        >
+                          Удалить
+                        </Button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+      </AppModal>
+
       <AddToPlaylistsModal
-        open={Boolean(addPath)}
+        open={Boolean(addPath) || Boolean(addBatchPaths?.length)}
         path={addPath}
+        paths={addBatchPaths ?? undefined}
         trackTitle={addTitle}
         onClose={() => {
           setAddPath(null)
           setAddTitle(undefined)
+          setAddBatchPaths(null)
         }}
         onSaved={() => {
           void loadPlaylists()

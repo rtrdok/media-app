@@ -40,6 +40,9 @@ type AppContextValue = {
   setMiniPlayer: (v: boolean | ((prev: boolean) => boolean)) => void
   historySearchRef: React.RefObject<HTMLInputElement | null>
   focusHistorySearch: () => void
+  globalSearchOpen: boolean
+  openGlobalSearch: () => void
+  closeGlobalSearch: () => void
   notifyDot: boolean
 }
 
@@ -81,6 +84,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [shuffle, setShuffleState] = useState(false)
   const [repeat, setRepeatState] = useState<RepeatMode>("off")
   const [miniPlayer, setMiniPlayerState] = useState(false)
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
   const historySearchRef = useRef<HTMLInputElement | null>(null)
   const queueRef = useRef<PlayerTrack[]>([])
   const queueIndexRef = useRef(0)
@@ -333,10 +337,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     syncQueue()
   }, [syncQueue])
 
+  const openGlobalSearch = useCallback(() => setGlobalSearchOpen(true), [])
+  const closeGlobalSearch = useCallback(() => setGlobalSearchOpen(false), [])
+
   const focusHistorySearch = useCallback(() => {
-    setPage("home")
-    window.setTimeout(() => historySearchRef.current?.focus(), 50)
-  }, [])
+    openGlobalSearch()
+  }, [openGlobalSearch])
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey)) return
+      if (e.key.toLowerCase() !== "k") return
+      const t = e.target as HTMLElement | null
+      const tag = t?.tagName?.toLowerCase()
+      if (tag === "input" || tag === "textarea" || t?.isContentEditable) {
+        // всё равно открываем глобальный поиск по Ctrl+K
+      }
+      e.preventDefault()
+      openGlobalSearch()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [openGlobalSearch])
 
   const notifyDot = Boolean(state?.last?.notify_pending)
 
@@ -368,6 +390,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMiniPlayer,
       historySearchRef,
       focusHistorySearch,
+      globalSearchOpen,
+      openGlobalSearch,
+      closeGlobalSearch,
       notifyDot,
     }),
     [
@@ -393,6 +418,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       miniPlayer,
       setMiniPlayer,
       focusHistorySearch,
+      globalSearchOpen,
+      openGlobalSearch,
+      closeGlobalSearch,
       notifyDot,
     ],
   )

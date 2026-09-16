@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useApp } from "@/context/AppProvider"
+import { PlaylistQueueModal, isPlaylistUrl } from "@/components/PlaylistQueueModal"
 import {
   cancelJob,
   deleteHistory,
@@ -110,6 +111,8 @@ export function HomePage() {
   const [previewError, setPreviewError] = useState("")
   const [localVideo, setLocalVideo] = useState<string | null>(null)
   const [clipPos, setClipPos] = useState(0)
+  const [playlistOpen, setPlaylistOpen] = useState(false)
+  const [playlistUrl, setPlaylistUrl] = useState("")
 
   const shazam = state?.last?.shazam
 
@@ -137,6 +140,9 @@ export function HomePage() {
       setPreviewThumb(j.thumb || "")
       const meta = [j.uploader, j.duration].filter(Boolean).join(" · ")
       setPreviewMeta(meta)
+      if (isPlaylistUrl(u)) {
+        setPreviewMeta((m) => (m ? `${m} · плейлист` : "Плейлист — выберите ролики при скачивании"))
+      }
       const qs = j.qualities || []
       if (qs.length) {
         setQualities(qs)
@@ -206,7 +212,31 @@ export function HomePage() {
   async function download() {
     const raw = url.trim()
     if (!raw) return
+    const u = firstUrl(raw)
     const audio = audioOnly || fmt.toUpperCase() === "MP3"
+
+    if (u && isPlaylistUrl(u) && !raw.includes("\n")) {
+      setPlaylistUrl(u)
+      setPlaylistOpen(true)
+      return
+    }
+
+    // уже скачано?
+    const hist = state?.history ?? []
+    const dup = hist.find((h) => {
+      if (!h.url || !u) return false
+      const same =
+        h.url === u ||
+        h.url.replace(/[?&]list=[^&]+/g, "") === u.replace(/[?&]list=[^&]+/g, "")
+      return same && Boolean(h.dest)
+    })
+    if (dup) {
+      const ok = window.confirm(
+        `Уже скачивалось:\n${dup.title || dup.url}\n\nСкачать ещё раз?`,
+      )
+      if (!ok) return
+    }
+
     await postJob({
       url: raw,
       kind: audio ? "audio" : "video",
@@ -517,6 +547,16 @@ export function HomePage() {
           ))
         )}
       </Card>
+
+      <PlaylistQueueModal
+        open={playlistOpen}
+        url={playlistUrl}
+        kind={audioOnly || fmt.toUpperCase() === "MP3" ? "audio" : "video"}
+        quality={quality}
+        fmt={fmt}
+        onClose={() => setPlaylistOpen(false)}
+        onQueued={() => void refresh()}
+      />
     </div>
   )
 }

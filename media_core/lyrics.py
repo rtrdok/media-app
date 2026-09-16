@@ -18,7 +18,8 @@ def fetch_lyrics(title: str, artist: str = "", duration_sec: float | None = None
     url = "https://lrclib.net/api/search?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": "MediaApp/1.4", "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=12) as r:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=12) as r:
             data = json.loads(r.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
         return {"ok": False, "error": f"HTTP {e.code}"}

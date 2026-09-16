@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { AppModal } from "@/components/ui/AppModal"
 import { Button } from "@/components/ui/button"
 import {
@@ -11,14 +11,19 @@ import { cn } from "@/lib/utils"
 
 type Props = {
   open: boolean
-  path: string | null
+  path?: string | null
+  paths?: string[]
   trackTitle?: string
   onClose: () => void
   onSaved?: () => void
 }
 
-/** Выбор одного или нескольких плейлистов для добавления трека. */
-export function AddToPlaylistsModal({ open, path, trackTitle, onClose, onSaved }: Props) {
+/** Выбор одного или нескольких плейлистов для добавления трека(ов). */
+export function AddToPlaylistsModal({ open, path, paths, trackTitle, onClose, onSaved }: Props) {
+  const targets = useMemo(
+    () => (paths && paths.length ? paths : path ? [path] : []).filter(Boolean) as string[],
+    [path, paths],
+  )
   const [playlists, setPlaylists] = useState<LibraryPlaylist[]>([])
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [creating, setCreating] = useState(false)
@@ -66,16 +71,16 @@ export function AddToPlaylistsModal({ open, path, trackTitle, onClose, onSaved }
   }
 
   async function save() {
-    if (!path || !selected.size) return
+    if (!targets.length || !selected.size) return
     setBusy(true)
     setMsg("")
     try {
       let added = 0
       for (const id of selected) {
-        const j = await libraryPlaylistAddTracks(id, [path])
+        const j = await libraryPlaylistAddTracks(id, targets)
         if (j.ok) added += j.added || 0
       }
-      setMsg(added ? `Добавлено в ${selected.size} плейлист(ов)` : "Уже было в выбранных")
+      setMsg(added ? `Добавлено: ${added} · плейлистов: ${selected.size}` : "Уже было в выбранных")
       onSaved?.()
       window.setTimeout(onClose, 500)
     } catch (e) {
@@ -85,18 +90,25 @@ export function AddToPlaylistsModal({ open, path, trackTitle, onClose, onSaved }
     }
   }
 
+  const desc =
+    targets.length > 1
+      ? `${targets.length} файлов`
+      : trackTitle
+        ? `«${trackTitle}»`
+        : undefined
+
   return (
     <AppModal
       open={open}
       title="Добавить в плейлист"
-      description={trackTitle ? `«${trackTitle}»` : undefined}
+      description={desc}
       onClose={onClose}
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
             Отмена
           </Button>
-          <Button onClick={() => void save()} disabled={busy || !path || !selected.size}>
+          <Button onClick={() => void save()} disabled={busy || !targets.length || !selected.size}>
             Добавить
           </Button>
         </>
@@ -144,12 +156,7 @@ export function AddToPlaylistsModal({ open, path, trackTitle, onClose, onSaved }
           </Button>
         </div>
       ) : (
-        <Button
-          variant="outline"
-          size="sm"
-          className="mt-3"
-          onClick={() => setCreating(true)}
-        >
+        <Button variant="outline" size="sm" className="mt-3" onClick={() => setCreating(true)}>
           + Новый плейлист
         </Button>
       )}

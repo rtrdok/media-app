@@ -76,7 +76,10 @@ def _github_headers() -> dict[str, str]:
 
 
 def _fetch_json(url: str) -> dict:
-    """JSON с GitHub API — всегда напрямую (системный VPN/PAC для Cursor не трогаем)."""
+    """JSON с GitHub API — всегда напрямую.
+
+    Системный VPN/прокси Windows не меняем (только игнорируем для этого запроса).
+    """
     req = urllib.request.Request(url, headers=_github_headers())
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(req, timeout=20) as r:
@@ -222,7 +225,7 @@ def _open_download_requests(url: str, *, connect_timeout: float = 15.0):
 
 
 def _download_via_curl(url: str, dest: Path) -> None:
-    """Запасной путь: curl.exe --noproxy * (обходит зависший WinINET 127.0.0.1)."""
+    """curl.exe --noproxy *: скачать напрямую, не трогая системный VPN/прокси."""
     import time
 
     from media_core.utils import subprocess_no_window_kwargs
@@ -267,7 +270,7 @@ def _download_via_curl(url: str, dest: Path) -> None:
         env.pop(k, None)
     env["NO_PROXY"] = "*"
     env["no_proxy"] = "*"
-    _set_job(message="Скачивание… через curl (без системного прокси)…", pct=0.0)
+    _set_job(message="Скачивание обновления…", pct=0.0)
     log(f"Update download via curl: {url}")
     proc = subprocess.Popen(
         cmd,
@@ -352,15 +355,18 @@ def _write_stream_to_file(dest: Path, total: int, chunks) -> None:
 
 
 def _download_file(url: str, dest: Path) -> None:
-    """Скачивает ZIP напрямую, без системного VPN/PAC (они часто для Cursor).
+    """Скачивает ZIP с GitHub напрямую. Прокси не нужен (GitHub в РФ доступен).
 
-    1) curl.exe --noproxy * (надёжнее обходит WinINET 127.0.0.1)
+    Системный VPN/прокси Windows не отключаем и не меняем — только не используем
+    их для этого скачивания (иначе локальный PAC/127.0.0.1 может зависнуть).
+
+    1) curl.exe --noproxy *
     2) requests без прокси (короткий connect-timeout)
     """
     last_err: Exception | None = None
     manual = "https://github.com/rtrdok/media-app/releases/latest"
 
-    # 1) curl first — WinINET leftover proxy hangs requests forever on some PCs
+    # 1) curl first — игнор системного прокси только в дочернем процессе
     try:
         _download_via_curl(url, dest)
         return
@@ -375,7 +381,7 @@ def _download_file(url: str, dest: Path) -> None:
 
     # 2) requests direct with hard wall-clock budget on connect
     try:
-        _set_job(message="Скачивание… напрямую…", pct=0.0, bytes_done=0, bytes_total=0)
+        _set_job(message="Скачивание обновления…", pct=0.0, bytes_done=0, bytes_total=0)
         log(f"Update download requests direct url={url}")
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
@@ -405,7 +411,7 @@ def _download_file(url: str, dest: Path) -> None:
             pass
 
     raise RuntimeError(
-        f"Не удалось скачать обновление (системный прокси Windows часто мешает). "
+        f"Не удалось скачать обновление. "
         f"Скачайте MediaApp-Installer.exe вручную: {manual} ({last_err})"
     )
 
