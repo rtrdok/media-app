@@ -24,8 +24,10 @@ _worker_lock = threading.Lock()
 _warned_no_id = False
 _fail_count = 0
 _use_agent = False
-_agent_launch_attempted = False
-_agent_launch_ts = 0.0
+# UAC только один раз за жизнь процесса Media App (иначе спам при Play)
+_uac_prompted = False
+_agent_ok_once = False
+_last_uac_fail_log = 0.0
 
 
 def _client_id() -> str:
@@ -60,26 +62,39 @@ def _is_access_denied(exc: BaseException) -> bool:
 
 
 def _agent_healthy() -> bool:
-    try:
-        with urllib.request.urlopen(f"{AGENT_URL}/health", timeout=0.6) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-        data = json.loads(raw)
-        return bool(data.get("ok"))
-    except Exception:
-        return False
+    """Несколько попыток — короткий таймаут не должен ронять агента как «мёртвого»."""
+    for _ in range(3):
+        try:
+            with urllib.request.urlopen(f"{AGENT_URL}/health", timeout=1.2) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            data = json.loads(raw)
+            if data.get("ok"):
+                return True
+        except Exception:
+            time.sleep(0.15)
+    return False
 
 
 def _launch_elevated_agent() -> bool:
-    """UAC: MediaApp.exe --discord-rpc-agent (или python main.py …)."""
-    global _agent_launch_attempted, _agent_launch_ts
-    now = time.time()
-    if _agent_launch_attempted and (now - _agent_launch_ts) < 45:
-        return _agent_healthy()
-    _agent_launch_attempted = True
-    _agent_launch_ts = now
+    """UAC: MediaApp.exe --discord-rpc-agent. Не чаще одного раза за сессию."""
+    global _uac_prompted, _agent_ok_once, _last_uac_fail_log
 
     if _agent_healthy():
+        _agent_ok_once = True
         return True
+
+    # Уже просили UAC в этой сессии — больше не трогаем ShellExecute(runas)
+    if _uac_prompted:
+        now = time.time()
+        if now - _last_uac_fail_log > 120:
+            log.warning(
+                "Discord RPC agent не отвечает. Перезапусти Media App "
+                "(UAC больше не спрашиваем в этой сессии, чтобы не спамить)."
+            )
+            _last_uac_fail_log = now
+        return False
+
+    _uac_prompted = True
 
     try:
         from pathlib import Path
@@ -109,10 +124,11 @@ def _launch_elevated_agent() -> bool:
         if rc <= 32:
             log.warning("Discord RPC agent UAC launch failed (code %s)", rc)
             return False
-        log.info("Discord RPC: запрошен elevated-агент (подтверди UAC)")
-        for _ in range(40):
+        log.info("Discord RPC: запрошен elevated-агент (подтверди UAC один раз)")
+        for _ in range(60):
             time.sleep(0.25)
             if _agent_healthy():
+                _agent_ok_once = True
                 log.info("Discord RPC agent is up")
                 return True
         log.warning("Discord RPC agent не ответил — UAC отклонён или агент не стартовал")
@@ -237,12 +253,20 @@ def _push_local(rpc, state: dict[str, Any], cid: str) -> None:
 
 def _sync_via_agent(state: dict[str, Any], cid: str) -> bool:
     if not _agent_healthy():
+        # не дёргать UAC повторно — только если ещё ни разу не поднимали
         if not _launch_elevated_agent():
             return False
     payload = dict(state)
     payload["client_id"] = cid
     res = _post_agent("/sync", payload)
-    return bool(res and res.get("ok"))
+    if res and res.get("ok"):
+        return True
+    # один повтор после короткой паузы (агент мог быть занят)
+    time.sleep(0.3)
+    if _agent_healthy():
+        res = _post_agent("/sync", payload)
+        return bool(res and res.get("ok"))
+    return False
 
 
 def _worker_main() -> None:
@@ -430,6 +454,5 @@ def clear_presence() -> None:
 
 
 def on_settings_changed() -> None:
-    global _agent_launch_attempted
-    _agent_launch_attempted = False
+    # не сбрасываем _uac_prompted — иначе снова UAC при каждом Save
     _enqueue("reset")
