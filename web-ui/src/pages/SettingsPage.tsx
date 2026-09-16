@@ -449,7 +449,7 @@ export function SettingsPage() {
                         />
                       </div>
                       <p className="text-muted-foreground mt-1 text-xs tabular-nums">
-                        {updPct > 0 ? `${updPct}%` : "Подключение…"}
+                        {updPct > 0 ? `${updPct}%` : updMsg.includes("Скачивание") ? updMsg : "Ожидание…"}
                       </p>
                     </div>
                   ) : null}

@@ -231,6 +231,15 @@ def _download_via_curl(url: str, dest: Path) -> None:
     from media_core.utils import subprocess_no_window_kwargs
 
     curl = shutil.which("curl") or shutil.which("curl.exe")
+    # GUI/.exe часто без PATH — типичный путь Windows
+    if not curl:
+        for cand in (
+            Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "curl.exe",
+            Path(r"C:\Windows\System32\curl.exe"),
+        ):
+            if cand.is_file():
+                curl = str(cand)
+                break
     if not curl:
         raise RuntimeError("curl.exe не найден")
 
@@ -240,10 +249,12 @@ def _download_via_curl(url: str, dest: Path) -> None:
         except OSError:
             pass
 
+    # -sS: без прогресса в stderr (иначе PIPE переполняется и curl зависает)
     cmd = [
         curl,
         "-L",
         "--fail",
+        "-sS",
         "--noproxy",
         "*",
         "--connect-timeout",
@@ -270,40 +281,51 @@ def _download_via_curl(url: str, dest: Path) -> None:
         env.pop(k, None)
     env["NO_PROXY"] = "*"
     env["no_proxy"] = "*"
-    _set_job(message="Скачивание обновления…", pct=0.0)
-    log(f"Update download via curl: {url}")
+    _set_job(message="Скачивание обновления…", pct=0.0, bytes_done=0, bytes_total=0)
+    log(f"Update download via curl: {curl} {url}")
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,  # не PIPE — иначе deadlock на progress meter
         env=env,
         **subprocess_no_window_kwargs(),
     )
     t0 = time.monotonic()
     last_done = 0
     last_t = t0
+    stalled_since = t0
     while proc.poll() is None:
         time.sleep(0.35)
         done = dest.stat().st_size if dest.is_file() else 0
         now = time.monotonic()
         dt = max(0.001, now - last_t)
         speed = (done - last_done) / dt
+        if done > last_done:
+            stalled_since = now
         last_t = now
         last_done = done
+        # оценка ~90 МБ, пока нет Content-Length
+        est_total = max(done, 90 * 1024 * 1024) if done else 0
+        pct = round(100.0 * done / est_total, 1) if est_total else 0.0
         _set_job(
-            pct=0.0,
+            pct=pct,
             bytes_done=done,
-            bytes_total=0,
+            bytes_total=est_total,
             speed_bps=round(speed, 1),
-            message=f"Скачивание… {_fmt_bytes(done)} · {_fmt_bytes(speed)}/с",
+            message=(
+                f"Скачивание… {_fmt_bytes(done)}"
+                + (f" · {_fmt_bytes(speed)}/с" if done else " (ожидание ответа)…")
+            ),
         )
+        if done == 0 and now - stalled_since > 45:
+            proc.kill()
+            raise TimeoutError("curl: нет данных за 45 с")
         if now - t0 > 900:
             proc.kill()
             raise TimeoutError("curl: превышено время скачивания")
 
-    err = (proc.stderr.read() if proc.stderr else b"").decode("utf-8", errors="replace")
     if proc.returncode != 0:
-        raise RuntimeError(f"curl exit {proc.returncode}: {err[-300:]}")
+        raise RuntimeError(f"curl exit {proc.returncode}")
     if not dest.is_file() or dest.stat().st_size < 1024:
         raise RuntimeError("curl: пустой файл")
     size = dest.stat().st_size
@@ -354,32 +376,82 @@ def _write_stream_to_file(dest: Path, total: int, chunks) -> None:
     )
 
 
+def _download_via_urllib(url: str, dest: Path) -> None:
+    """Прямое скачивание через urllib (без системного прокси) — без curl."""
+    import time
+
+    req = urllib.request.Request(url, headers=_download_headers(url))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    _set_job(message="Скачивание обновления…", pct=0.0, bytes_done=0, bytes_total=0)
+    log(f"Update download via urllib direct: {url}")
+    with opener.open(req, timeout=30) as r:
+        total = int(r.headers.get("Content-Length") or 0)
+        _set_job(bytes_total=total)
+        done = 0
+        t0 = time.monotonic()
+        last_t = t0
+        last_done = 0
+        with open(dest, "wb") as out:
+            while True:
+                chunk = r.read(256 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+                done += len(chunk)
+                now = time.monotonic()
+                if now - last_t >= 0.25:
+                    dt = max(0.001, now - last_t)
+                    speed = (done - last_done) / dt
+                    last_t = now
+                    last_done = done
+                    pct = round(100.0 * done / total, 1) if total else 0.0
+                    _set_job(
+                        pct=pct,
+                        bytes_done=done,
+                        bytes_total=total or done,
+                        speed_bps=round(speed, 1),
+                        message=(
+                            f"Скачивание… {pct}% · {_fmt_bytes(done)}"
+                            + (f" / {_fmt_bytes(total)}" if total else "")
+                            + f" · {_fmt_bytes(speed)}/с"
+                        ),
+                    )
+    size = dest.stat().st_size if dest.is_file() else 0
+    if size < 1024:
+        raise RuntimeError("urllib: пустой файл")
+    _set_job(pct=100.0, bytes_done=size, bytes_total=size, message=f"Скачано {_fmt_bytes(size)}")
+
+
 def _download_file(url: str, dest: Path) -> None:
     """Скачивает ZIP с GitHub напрямую. Прокси не нужен (GitHub в РФ доступен).
 
     Системный VPN/прокси Windows не отключаем и не меняем — только не используем
-    их для этого скачивания (иначе локальный PAC/127.0.0.1 может зависнуть).
+    их для этого скачивания.
 
-    1) curl.exe --noproxy *
-    2) requests без прокси (короткий connect-timeout)
+    1) urllib напрямую (без pipe/curl deadlock)
+    2) curl.exe --noproxy * -sS
+    3) requests без прокси
     """
     last_err: Exception | None = None
     manual = "https://github.com/rtrdok/media-app/releases/latest"
 
-    # 1) curl first — игнор системного прокси только в дочернем процессе
-    try:
-        _download_via_curl(url, dest)
-        return
-    except Exception as e:
-        last_err = e
-        log(f"Update download curl failed: {e}")
+    for label, fn in (
+        ("urllib", lambda: _download_via_urllib(url, dest)),
+        ("curl", lambda: _download_via_curl(url, dest)),
+    ):
         try:
-            if dest.is_file():
-                dest.unlink()
-        except OSError:
-            pass
+            fn()
+            return
+        except Exception as e:
+            last_err = e
+            log(f"Update download {label} failed: {e}")
+            try:
+                if dest.is_file():
+                    dest.unlink()
+            except OSError:
+                pass
 
-    # 2) requests direct with hard wall-clock budget on connect
+    # 3) requests direct with hard wall-clock budget on connect
     try:
         _set_job(message="Скачивание обновления…", pct=0.0, bytes_done=0, bytes_total=0)
         log(f"Update download requests direct url={url}")
@@ -496,7 +568,7 @@ def _run_update_job(url: str) -> None:
                 bytes_done=0,
                 bytes_total=0,
                 speed_bps=0.0,
-                message="Скачивание… подключение",
+                message="Скачивание обновления…",
                 error="",
                 restart=False,
             )
