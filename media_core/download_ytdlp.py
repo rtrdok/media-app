@@ -390,7 +390,9 @@ async def probe_video_info(
     if proxies_override is not None:
         proxies = proxies_override
     else:
-        proxies = await get_proxies_to_try()
+        from media_core.net_proxy import is_direct_only_host
+
+        proxies = await get_proxies_to_try(force_direct=is_direct_only_host(url))
         if not proxies:
             proxies = [None]
 
@@ -573,7 +575,9 @@ async def download_ytdlp(
         if proxies_override is not None:
             proxies = proxies_override
         else:
-            loaded = await get_proxies_to_try()
+            from media_core.net_proxy import is_direct_only_host
+
+            loaded = await get_proxies_to_try(force_direct=is_direct_only_host(url))
             if not loaded:
                 log.warning("yt-dlp: нет активных прокси — скачивание отменено")
                 _set_last_error("нет активных прокси")

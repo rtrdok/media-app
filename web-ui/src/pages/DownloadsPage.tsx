@@ -10,6 +10,8 @@ export function DownloadsPage() {
   const queue = state?.queue ?? []
   const files = state?.files ?? []
   const paused = !!state?.paused
+  const runningCount = state?.running_count ?? queue.filter((q) => q.status === "running").length
+  const maxConcurrent = state?.max_concurrent ?? state?.settings?.max_concurrent_downloads ?? 3
 
   return (
     <div className="w-full pt-8 pr-8 pb-32 pl-8">
@@ -20,7 +22,14 @@ export function DownloadsPage() {
 
       <Card className="mb-6 rounded-2xl">
         <CardHeader>
-          <CardTitle className="text-lg">Текущая загрузка</CardTitle>
+          <CardTitle className="text-lg">
+            Активные загрузки
+            {runningCount > 0 ? (
+              <span className="text-muted-foreground ml-2 text-sm font-normal">
+                · {runningCount}/{maxConcurrent}
+              </span>
+            ) : null}
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-muted-foreground text-sm">
@@ -59,7 +68,7 @@ export function DownloadsPage() {
               Очистить очередь
             </Button>
             <Button variant="ghost" size="sm" className="text-destructive" onClick={() => void cancelJob()}>
-              Отмена текущей
+              Отмена активных
             </Button>
             <Button
               variant="ghost"
@@ -101,6 +110,13 @@ export function DownloadsPage() {
                     {q.status === "error" ? "ошибка" : q.status}
                   </span>
                 </div>
+                {q.status === "running" && q.progress ? (
+                  <p className="text-muted-foreground text-xs">
+                    {[q.progress.stage, q.progress.percent, q.progress.speed, q.progress.eta]
+                      .filter(Boolean)
+                      .join(" · ") || "Загрузка…"}
+                  </p>
+                ) : null}
                 {q.status === "error" && q.error ? (
                   <p className="text-destructive/90 text-xs whitespace-pre-wrap break-words">{q.error}</p>
                 ) : null}

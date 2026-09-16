@@ -318,9 +318,9 @@ export function SettingsPage() {
                   Использовать прокси
                 </Label>
                 <p className="text-muted-foreground text-xs">
-                  Для друзей из РФ и других регионов, где YouTube / сервисы недоступны.
-                  Прокси приложения — только из списка ниже. Системный VPN Windows не
-                  трогаем и при выключенном переключателе не используем.
+                  Для YouTube / Instagram и т.п., если без прокси не открывается.
+                  VK и Яндекс Музыка всегда идут напрямую (прокси к ним не нужен).
+                  Системный VPN Windows не трогаем.
                 </p>
               </div>
               <Switch
@@ -574,8 +574,10 @@ export function SettingsPage() {
             <div className="border-border space-y-3 border-t pt-4">
               <p className="text-sm font-medium">Расширение для браузера</p>
               <p className="text-muted-foreground text-sm">
-                Экспортирует cookies из Chrome или Firefox в Media App (YouTube, Instagram и др.).
-                После установки откройте расширение на нужном сайте и нажмите «Отправить в Media App».
+                Из браузера: ссылка сразу в очередь Media App и/или cookies
+                (YouTube, Instagram, VK, Яндекс…). Media App должно быть запущено.
+                После установки: «Отправить в Media App» — ссылка в очередь;
+                «Отправить cookies» — авторизация YouTube / Instagram / VK / Яндекс.
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button

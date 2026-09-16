@@ -120,8 +120,13 @@ def mask_proxy(p: str) -> str:
     return p
 
 
-async def get_proxies_to_try() -> list[str | None]:
-    """Список попыток: при включённом прокси сначала прокси (для РФ), затем direct."""
+async def get_proxies_to_try(*, force_direct: bool = False) -> list[str | None]:
+    """Список попыток: при включённом прокси сначала прокси (для РФ), затем direct.
+
+    force_direct=True — только напрямую (VK / Яндекс и т.п.).
+    """
+    if force_direct:
+        return [None]
     from media_core.settings_store import get_configured_proxies
 
     extra = get_configured_proxies()

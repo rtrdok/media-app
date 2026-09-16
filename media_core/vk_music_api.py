@@ -55,6 +55,7 @@ def _mobile_client(cookies_header: str | None = None) -> httpx.AsyncClient:
         headers["Cookie"] = cookies_header
     return httpx.AsyncClient(
         **httpx_client_kwargs(
+            force_direct=True,
             timeout=45,
             follow_redirects=True,
             headers=headers,

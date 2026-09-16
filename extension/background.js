@@ -45,7 +45,7 @@ function netscapeLine(c) {
 
 async function collectNetscape() {
   const a = api();
-  const lines = ["# Netscape HTTP Cookie File", "# Media App Cookies extension", ""];
+  const lines = ["# Netscape HTTP Cookie File", "# Media App extension", ""];
   const seen = new Set();
   for (const pageUrl of COOKIE_URLS) {
     let list = [];
@@ -86,7 +86,7 @@ async function sendCookies(overrideToken) {
   }
   const { text, count } = await collectNetscape();
   if (!count) {
-    throw new Error("Cookies пусты. Залогинься на YouTube/Instagram в этом браузере.");
+    throw new Error("Cookies пусты. Залогинься на YouTube/Instagram/VK в этом браузере.");
   }
   const r = await fetch(`http://127.0.0.1:${port}/api/cookies/from-extension`, {
     method: "POST",
@@ -112,9 +112,81 @@ async function sendCookies(overrideToken) {
   return { port, count: j.count || count };
 }
 
+async function sendJob(pageUrl, overrideToken) {
+  const url = String(pageUrl || "").trim();
+  if (!url || !/^https?:\/\//i.test(url)) {
+    throw new Error("Нет ссылки на странице");
+  }
+  const { ports, token: cfgToken } = bridgeConfig();
+  const token = String(overrideToken || cfgToken || "");
+  const port = await findBridge(ports, token);
+  if (!port) {
+    throw new Error("Media App не найден. Открой приложение и попробуй снова.");
+  }
+  const r = await fetch(`http://127.0.0.1:${port}/api/extension/job`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { "X-Media-Token": token } : {}),
+    },
+    body: JSON.stringify({ url }),
+  });
+  let j = {};
+  try {
+    j = await r.json();
+  } catch (_) {}
+  if (!r.ok || !j.ok) {
+    const detail = j.detail || j.error || `Ошибка сервера (${r.status})`;
+    if (r.status === 403) {
+      throw new Error(
+        detail ||
+        "Токен не совпал. В Media App снова нажми «Скачать расширение» и перезагрузи его."
+      );
+    }
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return { port, id: j.id, kind: j.kind, title: j.title || url, queue_len: j.queue_len };
+}
+
+function ensureContextMenus() {
+  const a = api();
+  if (!a.contextMenus || !a.contextMenus.create) return;
+  try {
+    a.contextMenus.removeAll(() => {
+      a.contextMenus.create({
+        id: "media-app-send-page",
+        title: "Отправить в Media App",
+        contexts: ["page", "video", "audio"],
+      });
+      a.contextMenus.create({
+        id: "media-app-send-link",
+        title: "Отправить ссылку в Media App",
+        contexts: ["link"],
+      });
+    });
+  } catch (_) {}
+}
+
+api().runtime.onInstalled.addListener(() => ensureContextMenus());
+api().runtime.onStartup.addListener(() => ensureContextMenus());
+ensureContextMenus();
+
+if (api().contextMenus && api().contextMenus.onClicked) {
+  api().contextMenus.onClicked.addListener((info) => {
+    const url = info.linkUrl || info.pageUrl || info.srcUrl || "";
+    sendJob(url).catch(() => {});
+  });
+}
+
 api().runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.type === "SEND_COOKIES") {
     sendCookies(msg.token)
+      .then((r) => sendResponse({ ok: true, ...r }))
+      .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+    return true;
+  }
+  if (msg && msg.type === "SEND_JOB") {
+    sendJob(msg.url, msg.token)
       .then((r) => sendResponse({ ok: true, ...r }))
       .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
     return true;

@@ -29,6 +29,13 @@ export type QueueItem = {
   title: string
   status: string
   error?: string
+  progress?: {
+    stage?: string
+    percent?: string
+    speed?: string
+    eta?: string
+    indeterminate?: boolean
+  } | null
 }
 
 export type RepeatMode = "off" | "one" | "all"
@@ -57,6 +64,8 @@ export type AppSettings = {
 export type AppState = {
   busy: boolean
   paused: boolean
+  running_count?: number
+  max_concurrent?: number
   progress: {
     stage: string
     percent: string

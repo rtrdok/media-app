@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Media App Cookies",
-  "version": "1.0.1",
-  "description": "Отправка cookies YouTube/Instagram/VK в Media App",
-  "permissions": ["cookies", "storage"],
+  "name": "Media App",
+  "version": "1.1.0",
+  "description": "Cookies и «Отправить в Media App» — очередь загрузок с текущей вкладки",
+  "permissions": ["cookies", "storage", "activeTab", "contextMenus", "tabs"],
   "host_permissions": [
     "*://*.youtube.com/*",
     "*://*.google.com/*",
@@ -16,11 +16,15 @@
     "*://*.tiktok.com/*",
     "*://*.yandex.ru/*",
     "*://*.soundcloud.com/*",
+    "*://*.rutube.ru/*",
+    "*://*.coub.com/*",
+    "*://*.twitter.com/*",
+    "*://*.x.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
   "action": {
-    "default_title": "Media App Cookies",
+    "default_title": "Media App",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icon16.png",

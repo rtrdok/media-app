@@ -56,8 +56,8 @@ def build_extension_zip(port: int | None = None) -> bytes:
         zf.writestr("config.js", config)
         zf.writestr(
             "INSTALL.txt",
-            "Media App Cookies\n"
-            "=================\n\n"
+            "Media App — расширение браузера\n"
+            "================================\n\n"
             "Chrome / Edge / Brave:\n"
             "1) chrome://extensions  (или edge://extensions)\n"
             "2) Включи «Режим разработчика»\n"
@@ -67,6 +67,10 @@ def build_extension_zip(port: int | None = None) -> bytes:
             "1) about:debugging#/runtime/this-firefox\n"
             "2) «Загрузить временное дополнение»\n"
             "3) Выбери manifest.json из распакованной папки\n\n"
-            "Затем открой Media App и в расширении нажми «Отправить cookies».\n",
+            "Как пользоваться:\n"
+            "• «Отправить в Media App» — текущая вкладка сразу в очередь загрузок\n"
+            "• ПКМ по ссылке / странице → «Отправить в Media App»\n"
+            "• «Отправить cookies» — YouTube / Instagram / VK / Яндекс и др.\n"
+            "Media App при этом должно быть запущено.\n",
         )
     return buf.getvalue()

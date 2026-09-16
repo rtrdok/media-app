@@ -186,6 +186,7 @@ _queue_id = 0
 _queue_lock = asyncio.Lock()
 _current_job: dict | None = None
 _pump_task: asyncio.Task | None = None
+_job_tasks: set[asyncio.Task] = set()
 _progress: dict = {
     "stage": "",
     "percent": "",
@@ -197,12 +198,59 @@ _progress: dict = {
 }
 
 
+def _blank_progress() -> dict:
+    return {
+        "stage": "",
+        "percent": "",
+        "speed": "",
+        "eta": "",
+        "indeterminate": False,
+        "updated_at": time.time(),
+        "started_at": 0.0,
+    }
+
+
+def _max_concurrent() -> int:
+    try:
+        n = int(get_all().get("max_concurrent_downloads") or 3)
+    except (TypeError, ValueError):
+        n = 3
+    return max(1, min(4, n))
+
+
+def _running_items() -> list[dict]:
+    return [q for q in _queue if q.get("status") == "running"]
+
+
+def _sync_busy_and_progress() -> None:
+    """Обновить глобальные busy/progress по активным задачам (для UI)."""
+    global _busy, _current_job, _progress
+    running = _running_items()
+    _busy = bool(running)
+    _current_job = running[0] if running else None
+    if not running:
+        _progress = _blank_progress()
+        return
+    # Показать прогресс самой «свежей» активной задачи
+    best = max(running, key=lambda q: float((q.get("progress") or {}).get("updated_at") or 0))
+    src = best.get("progress") or _blank_progress()
+    _progress = dict(src)
+
+
+def _cancel_all_running() -> None:
+    _cancel.set()
+    for q in _running_items():
+        ev = q.get("cancel_event")
+        if isinstance(ev, threading.Event):
+            ev.set()
+
+
 def request_app_shutdown() -> None:
     """Остановить очередь загрузок и HTTP-сервер (при закрытии окна)."""
     global _shutting_down, _paused
     _shutting_down = True
     _paused = True
-    _cancel.set()
+    _cancel_all_running()
     stop_uvicorn_server()
 
 
@@ -342,6 +390,13 @@ class ExtensionCookiesIn(BaseModel):
     count: int = 0
 
 
+class ExtensionJobIn(BaseModel):
+    url: str = ""
+    kind: str = ""
+    quality: str = "best"
+    fmt: str = ""
+
+
 def _check_extension_token(request: Request) -> None:
     expected = get_extension_token()
     if not expected:
@@ -398,6 +453,7 @@ async def _thumb(url: str | None) -> str | None:
             "Accept": "image/avif,image/webp,image/*,*/*;q=0.8",
         }
         low = url.lower()
+        vkish = any(x in low for x in ("userapi.com", "vkuseraudio", "vk.com", "vk.ru", "sun", "yandex."))
         if any(x in low for x in ("userapi.com", "vkuseraudio", "vk.com", "vk.ru", "sun")):
             headers["Referer"] = "https://vk.com/"
             try:
@@ -408,7 +464,7 @@ async def _thumb(url: str | None) -> str | None:
                     headers["Cookie"] = cookies
             except Exception:
                 pass
-        kw = apply_requests_kwargs({"timeout": 15, "headers": headers})
+        kw = apply_requests_kwargs({"timeout": 15, "headers": headers}, force_direct=vkish)
         r = requests.get(url, **kw)
         r.raise_for_status()
         dest.write_bytes(r.content)
@@ -457,10 +513,13 @@ async def index():
 
 @app.get("/api/state")
 async def state(files: int = 0):
+    _sync_busy_and_progress()
     return {
         "busy": _busy,
         "paused": _paused,
         "progress": dict(_progress),
+        "running_count": len(_running_items()),
+        "max_concurrent": _max_concurrent(),
         "last": dict(_last),
         "download_dir": get_download_dir(),
         "settings": get_all(),
@@ -469,7 +528,15 @@ async def state(files: int = 0):
         "history": _history_payload(),
         "files": _list_files() if files else [],
         "queue": [
-            {"id": q["id"], "url": q["url"], "kind": q["kind"], "title": q.get("title") or q["url"], "status": q["status"], "error": q.get("error") or ""}
+            {
+                "id": q["id"],
+                "url": q["url"],
+                "kind": q["kind"],
+                "title": q.get("title") or q["url"],
+                "status": q["status"],
+                "error": q.get("error") or "",
+                "progress": dict(q["progress"]) if q.get("status") == "running" and q.get("progress") else None,
+            }
             for q in _queue
         ],
         "last_error": (_last.get("error") or ""),
@@ -606,8 +673,12 @@ async def queue_pause():
     global _paused, _soft_pause
     _paused = True
     _soft_pause = True
-    _cancel.set()
-    _progress["stage"] = "Пауза…"
+    _cancel_all_running()
+    for q in _running_items():
+        prog = q.get("progress")
+        if isinstance(prog, dict):
+            prog["stage"] = "Пауза…"
+    _sync_busy_and_progress()
     return {"ok": True, "paused": True}
 
 
@@ -634,8 +705,12 @@ async def queue_clear():
 async def cancel():
     global _soft_pause
     _soft_pause = False
-    _cancel.set()
-    _progress["stage"] = "Отмена…"
+    _cancel_all_running()
+    for q in _running_items():
+        prog = q.get("progress")
+        if isinstance(prog, dict):
+            prog["stage"] = "Отмена…"
+    _sync_busy_and_progress()
     return {"ok": True}
 
 
@@ -1317,6 +1392,38 @@ async def cookies_from_extension(body: ExtensionCookiesIn, request: Request):
     return result
 
 
+@app.post("/api/extension/job")
+async def extension_job(body: ExtensionJobIn, request: Request):
+    """Очередь загрузки из браузерного расширения («Отправить в Media App»)."""
+    _check_extension_token(request)
+    from media_core.utils import is_track_download_url
+
+    url = clean_media_url((body.url or "").strip())
+    if not url:
+        raise HTTPException(400, "Нет ссылки")
+    if not detect_platform(url) or is_unsupported_media_url(url):
+        raise HTTPException(400, "Эта ссылка не поддерживается")
+    kind = (body.kind or "").strip().lower()
+    if kind not in ("video", "audio", "track", "shazam"):
+        kind = "audio" if is_track_download_url(url) else "video"
+    fmt = (body.fmt or "").strip().upper()
+    if not fmt:
+        fmt = "MP3" if kind == "audio" else "MP4"
+    quality = (body.quality or "best").strip() or "best"
+    item = _enqueue_one(
+        JobIn(url=url, kind=kind, quality=quality, fmt=fmt, start="", end="", track="")
+    )
+    _schedule_pump()
+    _last["message"] = f"Из браузера в очередь: {item.get('title') or url}"
+    return {
+        "ok": True,
+        "id": item["id"],
+        "queue_len": len(_queue),
+        "kind": kind,
+        "title": item.get("title") or url,
+    }
+
+
 @app.get("/api/extension/download")
 async def extension_download():
     from media_core.extension_pack import build_extension_zip, ensure_extension_token
@@ -1326,7 +1433,7 @@ async def extension_download():
     return Response(
         content=data,
         media_type="application/zip",
-        headers={"Content-Disposition": 'attachment; filename="MediaApp-Cookies-Extension.zip"'},
+        headers={"Content-Disposition": 'attachment; filename="MediaApp-Extension.zip"'},
     )
 
 
@@ -1706,39 +1813,61 @@ async def anime(file: UploadFile = File(...)):
 
 
 async def _pump_queue():
-    global _busy, _current_job, _soft_pause
-    if _shutting_down or _busy or _paused:
+    """Запустить до max_concurrent задач из очереди."""
+    if _shutting_down or _paused:
         return
-    nxt = next((q for q in _queue if q["status"] == "queued"), None)
-    if not nxt:
-        return
-    if get_bool("check_disk_space", True):
-        import shutil
+    async with _queue_lock:
+        running_n = len(_running_items())
+        slots = _max_concurrent() - running_n
+        if slots <= 0:
+            return
+        started = 0
+        while started < slots:
+            nxt = next((q for q in _queue if q["status"] == "queued"), None)
+            if not nxt:
+                break
+            if get_bool("check_disk_space", True):
+                import shutil
 
-        try:
-            usage = shutil.disk_usage(get_download_dir())
-            if usage.free < 500 * 1024 * 1024:
-                _last["error"] = "Мало места на диске (нужно ~500 МБ)"
-                nxt["status"] = "error"
-                nxt["error"] = _last["error"]
-                return
-        except OSError:
-            pass
-    _busy = True
-    _current_job = nxt
-    nxt["status"] = "running"
-    _cancel.clear()
-    _soft_pause = False
-    _progress.update(
-        stage="Старт…", percent="", speed="", eta="",
-        indeterminate=True, updated_at=time.time(), started_at=time.time(),
-    )
+                try:
+                    usage = shutil.disk_usage(get_download_dir())
+                    if usage.free < 500 * 1024 * 1024:
+                        _last["error"] = "Мало места на диске (нужно ~500 МБ)"
+                        nxt["status"] = "error"
+                        nxt["error"] = _last["error"]
+                        continue
+                except OSError:
+                    pass
+            cancel_ev = threading.Event()
+            progress = _blank_progress()
+            progress.update(
+                stage="Старт…",
+                indeterminate=True,
+                started_at=time.time(),
+            )
+            nxt["cancel_event"] = cancel_ev
+            nxt["progress"] = progress
+            nxt["status"] = "running"
+            nxt["error"] = ""
+            task = asyncio.create_task(_execute_job(nxt))
+            _job_tasks.add(task)
+            task.add_done_callback(_job_tasks.discard)
+            started += 1
+        _sync_busy_and_progress()
+
+
+async def _execute_job(nxt: dict) -> None:
+    """Одна загрузка из очереди (параллельно с другими)."""
+    global _soft_pause
+    progress = nxt.get("progress") or _blank_progress()
+    cancel_ev = nxt.get("cancel_event") or threading.Event()
     _last.update(error="", message="")
     try:
-        await _run(nxt["body"])
+        await _run(nxt["body"], progress_state=progress, cancel_event=cancel_ev)
         if _soft_pause or (_paused and _last.get("message") == "Отменено"):
-            # soft-pause: вернуть задачу в очередь
             nxt["status"] = "queued"
+            nxt.pop("cancel_event", None)
+            nxt.pop("progress", None)
             _last["message"] = "Пауза"
             _last["error"] = ""
         elif _last.get("error"):
@@ -1758,18 +1887,18 @@ async def _pump_queue():
     except Exception as e:
         if _soft_pause:
             nxt["status"] = "queued"
+            nxt.pop("cancel_event", None)
+            nxt.pop("progress", None)
             _last["message"] = "Пауза"
         else:
             nxt["status"] = "error"
             nxt["error"] = str(e)
             _last["error"] = str(e)
     finally:
-        _busy = False
-        _current_job = None
-        _progress.update(
-            stage="", percent="", speed="", eta="",
-            indeterminate=False, updated_at=time.time(),
-        )
+        if nxt.get("status") != "queued":
+            nxt.pop("cancel_event", None)
+            nxt.pop("progress", None)
+        _sync_busy_and_progress()
         while len(_queue) > 40:
             for i, q in enumerate(_queue):
                 if q["status"] in ("done", "error"):
@@ -1781,7 +1910,14 @@ async def _pump_queue():
             _schedule_pump()
 
 
-async def _run(body: JobIn):
+async def _run(
+    body: JobIn,
+    *,
+    progress_state: dict | None = None,
+    cancel_event: threading.Event | None = None,
+):
+    progress = progress_state if progress_state is not None else _progress
+    cancel = cancel_event if cancel_event is not None else _cancel
     try:
         url = clean_media_url(body.url.strip())
         start, end = _clip(body.start, body.end)
@@ -1792,10 +1928,11 @@ async def _run(body: JobIn):
             from media_core.media_tags import split_artist_title, tag_mp3
 
             track = body.track.strip()
-            _progress["stage"] = "Ищу полный трек…"
+            progress["stage"] = "Ищу полный трек…"
+            progress["updated_at"] = time.time()
             query = f"ytsearch1:{track}"
             path = await download_ytdlp(
-                query, audio_only=True, progress_state=_progress, cancel_event=_cancel,
+                query, audio_only=True, progress_state=progress, cancel_event=cancel,
             )
             if path is CANCELLED:
                 _last["message"] = "Отменено"
@@ -1826,13 +1963,13 @@ async def _run(body: JobIn):
         if body.kind == "shazam":
             from media_core.recognize import recognize_music_from_url
 
-            _progress.update(
+            progress.update(
                 stage="Готовлю отрезок для распознавания…",
                 indeterminate=True,
                 updated_at=time.time(),
             )
             result = await recognize_music_from_url(
-                url, cancel_event=_cancel, progress_state=_progress, start=start, end=end,
+                url, cancel_event=cancel, progress_state=progress, start=start, end=end,
             )
             if result is CANCELLED:
                 _last["message"] = "Отменено"
@@ -1861,7 +1998,7 @@ async def _run(body: JobIn):
                 _last["shazam"] = payload
             return
 
-        _progress.update(
+        progress.update(
             stage=f"Начинаю скачивание… ({body.quality}{'p' if body.quality.isdigit() else ''} · {body.fmt})",
             indeterminate=True,
             updated_at=time.time(),
@@ -1870,7 +2007,7 @@ async def _run(body: JobIn):
         container = "mp3" if audio else body.fmt.strip().lower()
         path = await process_url(
             url, audio_only=audio, format_override=fmt,
-            progress_state=_progress, cancel_event=_cancel, start=start, end=end,
+            progress_state=progress, cancel_event=cancel, start=start, end=end,
             container=container,
         )
         if path is CANCELLED:
@@ -1880,7 +2017,7 @@ async def _run(body: JobIn):
             err = get_last_download_error()
             _last["error"] = str(err) if err else "Не удалось скачать"
             return
-        _progress.update(stage="Сохраняю файл…", indeterminate=True, updated_at=time.time())
+        progress.update(stage="Сохраняю файл…", indeterminate=True, updated_at=time.time())
         from media_core.download_ytdlp import get_last_extract_info
         from media_core.media_tags import split_artist_title, tag_mp3
         from media_core.yandex_music_api import get_last_yandex_track_meta
