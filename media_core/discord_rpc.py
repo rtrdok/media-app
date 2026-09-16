@@ -1,11 +1,12 @@
 """Discord Rich Presence: «Listening to Media App» при воспроизведении.
 
-pypresence использует asyncio и ломается внутри цикла FastAPI
-(«This event loop is already running») — вся работа в отдельном потоке.
+pypresence + FastAPI: работа только в отдельном потоке со своим asyncio loop.
+WinError 5 часто из‑за Discord «от имени администратора» — ретраи + подсказка.
 """
 
 from __future__ import annotations
 
+import asyncio
 import queue
 import threading
 import time
@@ -17,7 +18,7 @@ _q: queue.Queue = queue.Queue(maxsize=8)
 _worker: threading.Thread | None = None
 _worker_lock = threading.Lock()
 _warned_no_id = False
-_warned_fail = False
+_fail_count = 0
 
 
 def _client_id() -> str:
@@ -59,11 +60,28 @@ def _close_rpc(rpc) -> None:
 
 
 def _connect(cid: str):
+    """Подключение в текущем потоке; у потока должен быть свой event loop."""
     from pypresence import Presence
 
-    rpc = Presence(cid)
-    rpc.connect()
-    return rpc
+    last_err: Exception | None = None
+    for attempt in range(1, 6):
+        rpc = None
+        try:
+            rpc = Presence(cid)
+            rpc.connect()
+            return rpc
+        except Exception as e:
+            last_err = e
+            _close_rpc(rpc)
+            # Access denied / pipe busy — подождать и ещё раз
+            winerr = getattr(e, "winerror", None) or getattr(e, "errno", None)
+            msg = str(e).lower()
+            retryable = winerr in (5, 32, 231) or "access" in msg or "pipe" in msg or "denied" in msg
+            if not retryable or attempt >= 5:
+                break
+            time.sleep(0.6 * attempt)
+    assert last_err is not None
+    raise last_err
 
 
 def _push_update(rpc, state: dict[str, Any]) -> None:
@@ -110,21 +128,20 @@ def _push_update(rpc, state: dict[str, Any]) -> None:
         kwargs["start"] = start_ts
     if end_ts is not None:
         kwargs["end"] = end_ts
-    use_art = thumb.startswith("http://") or thumb.startswith("https://")
-    if use_art:
-        kwargs["large_image"] = thumb
+    # Обложки по URL Discord часто отвергает — не мешаем статусу
     try:
         rpc.update(**kwargs)
     except Exception:
-        if use_art:
-            kwargs.pop("large_image", None)
-            rpc.update(**kwargs)
-        else:
-            raise
+        raise
 
 
 def _worker_main() -> None:
-    global _warned_no_id, _warned_fail
+    global _warned_no_id, _fail_count
+
+    # Свой loop — иначе pypresence цепляется к FastAPI и падает
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     rpc = None
     connected_id = ""
     last_sig = ""
@@ -139,6 +156,10 @@ def _worker_main() -> None:
         if item is None:
             _close_rpc(rpc)
             rpc = None
+            try:
+                loop.close()
+            except Exception:
+                pass
             break
 
         cmd, payload = item
@@ -148,7 +169,7 @@ def _worker_main() -> None:
             connected_id = ""
             last_sig = ""
             _warned_no_id = False
-            _warned_fail = False
+            _fail_count = 0
             continue
 
         if cmd != "sync":
@@ -198,7 +219,7 @@ def _worker_main() -> None:
             [title, artist, kind, "1" if playing else "0", str(int(duration)), thumb[:80], cid]
         )
         now = time.time()
-        if sig == last_sig and (now - last_push) < 15:
+        if sig == last_sig and (now - last_push) < 15 and rpc is not None:
             continue
 
         try:
@@ -207,18 +228,27 @@ def _worker_main() -> None:
                 rpc = _connect(cid)
                 connected_id = cid
                 log.info("Discord RPC connected (%s…)", cid[:6])
+                _fail_count = 0
             _push_update(rpc, state)
             last_sig = sig
             last_push = now
-            _warned_fail = False
         except Exception as e:
-            if not _warned_fail:
-                log.warning("Discord RPC failed: %s", e)
-                _warned_fail = True
+            _fail_count += 1
+            winerr = getattr(e, "winerror", None)
+            # Лог: первые 3 раза и потом каждые 10
+            if _fail_count <= 3 or _fail_count % 10 == 0:
+                log.warning("Discord RPC failed (%s): %s", _fail_count, e)
+                if winerr == 5 or "access is denied" in str(e).lower() or "отказано" in str(e).lower():
+                    log.warning(
+                        "Discord RPC: закрой Discord полностью (трей тоже) и запусти "
+                        "БЕЗ «от имени администратора», затем снова Play в Media App"
+                    )
             _close_rpc(rpc)
             rpc = None
             connected_id = ""
             last_sig = ""
+            # пауза перед следующим sync из очереди
+            time.sleep(min(2.0 + _fail_count * 0.3, 8.0))
 
 
 def _ensure_worker() -> None:
@@ -233,7 +263,6 @@ def _ensure_worker() -> None:
 def _enqueue(cmd: str, payload: Any = None) -> None:
     _ensure_worker()
     try:
-        # не копить устаревшие sync — оставляем только свежий
         if cmd == "sync":
             while not _q.empty():
                 try:
