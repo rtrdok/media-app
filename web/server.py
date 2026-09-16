@@ -752,13 +752,16 @@ async def check_update(quiet: int = 0):
                     "current": gh.get("current") or APP_VERSION,
                     "remote": gh.get("remote") or "",
                     "url": gh.get("url") or "",
+                    "installer_url": gh.get("installer_url") or "",
+                    "html_url": gh.get("html_url") or "",
                     "changelog": gh.get("changelog") or "",
                     "quiet": bool(quiet),
                     "message": gh.get("message") or "",
                     "update": {
                         "version": gh.get("remote") or "",
-                        "url": gh.get("url") or "",
+                        "url": gh.get("url") or gh.get("installer_url") or "",
                         "changelog": gh.get("changelog") or "",
+                        "html_url": gh.get("html_url") or "",
                     },
                 }
             return {

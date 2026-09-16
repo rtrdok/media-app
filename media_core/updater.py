@@ -138,18 +138,23 @@ def check_github_update() -> dict:
     remote = tag.lstrip("vV")
     body = str(data.get("body") or "").strip()
     assets = data.get("assets") or []
-    download = ""
+    zip_url = ""
+    installer_url = ""
     for a in assets:
         an = str(a.get("name") or "")
-        if an == "MediaApp.zip" or an.lower() == "mediaapp.zip":
-            download = str(a.get("browser_download_url") or "")
-            break
-    if not download:
-        for a in assets:
-            an = str(a.get("name") or "")
-            if an.lower().endswith(".zip") and "mediaapp" in an.lower():
-                download = str(a.get("browser_download_url") or "")
-                break
+        low = an.lower()
+        href = str(a.get("browser_download_url") or "")
+        if not href:
+            continue
+        if low == "mediaapp-installer.exe" or (low.endswith(".exe") and "installer" in low):
+            installer_url = href
+        elif low == "mediaapp.zip" or (low.endswith(".zip") and "mediaapp" in low):
+            if not zip_url:
+                zip_url = href
+
+    # Installer надёжнее zip-replace на машинах с системным VPN/PAC
+    download = installer_url or zip_url
+    html_url = str(data.get("html_url") or "") or f"https://github.com/{repo}/releases/latest"
 
     newer = bool(remote and is_newer(remote, APP_VERSION))
     return {
@@ -159,7 +164,9 @@ def check_github_update() -> dict:
         "tag": tag,
         "update": newer,
         "url": download,
-        "html_url": str(data.get("html_url") or ""),
+        "zip_url": zip_url,
+        "installer_url": installer_url,
+        "html_url": html_url,
         "changelog": body,
         "message": (
             f"Доступна версия {remote}"
@@ -436,8 +443,8 @@ def _download_file(url: str, dest: Path) -> None:
     manual = "https://github.com/rtrdok/media-app/releases/latest"
 
     for label, fn in (
-        ("urllib", lambda: _download_via_urllib(url, dest)),
         ("curl", lambda: _download_via_curl(url, dest)),
+        ("urllib", lambda: _download_via_urllib(url, dest)),
     ):
         try:
             fn()
@@ -559,7 +566,8 @@ def get_update_job() -> dict:
 
 def _run_update_job(url: str) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="mediaapp_dl_"))
-    zip_path = tmp / "MediaApp.zip"
+    is_exe = url.lower().split("?", 1)[0].endswith(".exe")
+    dest = tmp / ("MediaApp-Installer.exe" if is_exe else "MediaApp.zip")
     try:
         with _job_lock:
             _job.update(
@@ -573,8 +581,40 @@ def _run_update_job(url: str) -> None:
                 restart=False,
             )
         log(f"Downloading update from {url}")
-        _download_file(url, zip_path)
-        if not zipfile.is_zipfile(zip_path):
+        _download_file(url, dest)
+
+        if is_exe:
+            with _job_lock:
+                _job.update(status="applying", pct=100.0, message="Запуск установщика…")
+            flags = 0
+            if hasattr(subprocess, "DETACHED_PROCESS"):
+                flags |= subprocess.DETACHED_PROCESS
+            if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+            subprocess.Popen(
+                [str(dest)],
+                cwd=str(dest.parent),
+                creationflags=flags,
+                close_fds=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            with _job_lock:
+                _job.update(
+                    status="done",
+                    message="Установщик запущен — заверши установку в его окне.",
+                    restart=True,
+                )
+            try:
+                from media_core.process_cleanup import arm_hard_exit
+
+                arm_hard_exit(1.5)
+            except Exception:
+                threading.Timer(1.5, lambda: os._exit(0)).start()
+            return
+
+        if not zipfile.is_zipfile(dest):
             with _job_lock:
                 _job.update(
                     status="error",
@@ -585,7 +625,7 @@ def _run_update_job(url: str) -> None:
         with _job_lock:
             _job.update(status="applying", pct=100.0, message="Установка… Перезапуск…")
         target = install_dir()
-        script = _write_apply_script(zip_path, target)
+        script = _write_apply_script(dest, target)
         flags = 0
         if hasattr(subprocess, "CREATE_NO_WINDOW"):
             flags |= subprocess.CREATE_NO_WINDOW
@@ -611,7 +651,14 @@ def _run_update_job(url: str) -> None:
     except Exception as e:
         log(f"Update failed: {e}\n{traceback.format_exc()}")
         with _job_lock:
-            _job.update(status="error", message=f"Ошибка обновления: {e}", error=str(e))
+            _job.update(
+                status="error",
+                message=(
+                    f"Ошибка обновления: {e}. "
+                    "Открой GitHub Releases и поставь MediaApp-Installer.exe вручную."
+                ),
+                error=str(e),
+            )
         try:
             shutil.rmtree(tmp, ignore_errors=True)
         except Exception:
@@ -622,7 +669,15 @@ def start_update_job(url: str | None = None) -> dict:
     """Сразу отвечает клиенту; скачивание идёт в фоне."""
     with _job_lock:
         if _job["status"] in ("downloading", "applying"):
-            return {"ok": True, **dict(_job), "message": _job["message"] or "Уже скачивается…"}
+            # залипший job без прогресса — сброс
+            if float(_job.get("bytes_done") or 0) <= 0 and float(_job.get("pct") or 0) <= 0:
+                _job.update(status="idle", message="", error="")
+            else:
+                return {
+                    "ok": True,
+                    **dict(_job),
+                    "message": _job["message"] or "Уже скачивается…",
+                }
 
     dl = (url or "").strip()
     info: dict = {
@@ -638,7 +693,7 @@ def start_update_job(url: str | None = None) -> dict:
             info = check_github_update()
         except Exception as e:
             return {"ok": False, "status": "error", "message": f"Ошибка проверки: {e}"}
-        dl = (info.get("url") or "").strip()
+        dl = (info.get("url") or info.get("installer_url") or info.get("zip_url") or "").strip()
         if not info.get("update"):
             return {
                 **info,
@@ -652,7 +707,9 @@ def start_update_job(url: str | None = None) -> dict:
             **info,
             "ok": False,
             "status": "error",
-            "message": "В релизе нет MediaApp.zip.",
+            "message": "В релизе нет Installer/ZIP. Открой страницу релизов вручную.",
+            "html_url": info.get("html_url")
+            or "https://github.com/rtrdok/media-app/releases/latest",
         }
 
     t = threading.Thread(target=_run_update_job, args=(dl,), daemon=True)
@@ -663,6 +720,8 @@ def start_update_job(url: str | None = None) -> dict:
         "message": "Скачивание обновления…",
         "current": info.get("current"),
         "remote": info.get("remote"),
+        "html_url": info.get("html_url") or "",
+        "installer_url": info.get("installer_url") or "",
         "restart": False,
     }
 

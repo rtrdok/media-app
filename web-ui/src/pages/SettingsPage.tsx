@@ -20,6 +20,7 @@ import {
   cookiesOpenFolder,
   cookiesStatus,
   extensionSave,
+  openUrl,
   saveSettings,
   updateStatus,
   ytdlpUpdate,
@@ -36,6 +37,9 @@ export function SettingsPage() {
   const [updPct, setUpdPct] = useState(0)
   const [hasUpdate, setHasUpdate] = useState(false)
   const [updUrl, setUpdUrl] = useState("")
+  const [updHtmlUrl, setUpdHtmlUrl] = useState(
+    "https://github.com/rtrdok/media-app/releases/latest",
+  )
   const [updOk, setUpdOk] = useState(true)
   const [cookieOk, setCookieOk] = useState(false)
   const [extMsg, setExtMsg] = useState("")
@@ -90,6 +94,11 @@ export function SettingsPage() {
         setUpdMsg(`Доступна версия ${j.update.version}`)
         setUpdChangelog(j.update.changelog || j.changelog || "")
         setUpdUrl(j.update.url || "")
+        const html =
+          (j as { html_url?: string }).html_url ||
+          (j.update as { html_url?: string }).html_url ||
+          "https://github.com/rtrdok/media-app/releases/latest"
+        setUpdHtmlUrl(html)
       } else {
         setHasUpdate(false)
         setUpdUrl("")
@@ -141,14 +150,19 @@ export function SettingsPage() {
             /* ignore transient */
           })
       }, 400)
-      // если долго 0% — не крутить «Подключение» вечно без статуса
+      // если 45 с без прогресса — предложить ручную установку
       window.setTimeout(() => {
         void updateStatus().then((s) => {
-          if (s.status === "downloading" && !(s.pct && s.pct > 0) && s.message) {
-            setUpdMsg(s.message)
+          if (s.status === "downloading" && !(s.pct && s.pct > 0) && !(s.bytes_done && s.bytes_done > 0)) {
+            setUpdOk(false)
+            setUpdBusy(false)
+            window.clearInterval(pollRef.current)
+            setUpdMsg(
+              "Автообновление зависло. Нажми «Скачать установщик» и поставь вручную — так надёжнее.",
+            )
           }
         })
-      }, 20000)
+      }, 45000)
     } catch (e) {
       setUpdOk(false)
       setUpdMsg(e instanceof Error ? e.message : String(e))
@@ -472,21 +486,39 @@ export function SettingsPage() {
                   Проверить обновления
                 </Button>
                 {hasUpdate ? (
-                  <Button
-                    size="sm"
-                    className="gap-2"
-                    disabled={updBusy}
-                    onClick={() => void onApplyUpdate()}
-                  >
-                    <Download className="size-3.5" />
-                    Скачать и обновить
-                  </Button>
+                  <>
+                    <Button
+                      size="sm"
+                      className="gap-2"
+                      disabled={updBusy}
+                      onClick={() => void openUrl(updUrl || updHtmlUrl)}
+                    >
+                      <Download className="size-3.5" />
+                      Скачать установщик
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="gap-2"
+                      disabled={updBusy}
+                      onClick={() => void onApplyUpdate()}
+                    >
+                      Автообновление
+                    </Button>
+                  </>
                 ) : null}
               </div>
             </div>
             <p className="text-muted-foreground text-xs">
-              Обновления берутся с GitHub Releases. Настройки и история хранятся отдельно и не
-              сбрасываются.
+              Если автообновление зависает — жми «Скачать установщик» (или открой{" "}
+              <button
+                type="button"
+                className="text-primary underline"
+                onClick={() => void openUrl(updHtmlUrl)}
+              >
+                GitHub Releases
+              </button>
+              ). Настройки и история не сбрасываются.
             </p>
           </CardContent>
         </Card>
