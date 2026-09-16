@@ -178,11 +178,14 @@ def _connect_local(cid: str):
 def _push_local(rpc, state: dict[str, Any], cid: str) -> None:
     from pypresence.types import ActivityType, StatusDisplayType
 
+    from media_core.discord_presence import discord_cover_image
+
     has_track = bool(state.get("has_track"))
     playing = bool(state.get("playing"))
     title = _clip(str(state.get("title") or "Трек"))
     artist = _clip(str(state.get("artist") or ""))
     kind = str(state.get("kind") or "audio").lower()
+    cover = discord_cover_image(str(state.get("thumb") or ""))
     try:
         current = float(state.get("current") or 0)
     except (TypeError, ValueError):
@@ -217,7 +220,19 @@ def _push_local(rpc, state: dict[str, Any], cid: str) -> None:
         kwargs["start"] = start_ts
     if end_ts is not None:
         kwargs["end"] = end_ts
-    rpc.update(**kwargs)
+    if cover:
+        kwargs["large_image"] = cover
+    else:
+        # опциональный ассет из Developer Portal → Rich Presence → Art Assets
+        kwargs["large_image"] = "logo"
+    try:
+        rpc.update(**kwargs)
+    except Exception:
+        if cover or kwargs.get("large_image") == "logo":
+            kwargs.pop("large_image", None)
+            rpc.update(**kwargs)
+        else:
+            raise
 
 
 def _sync_via_agent(state: dict[str, Any], cid: str) -> bool:
@@ -299,6 +314,7 @@ def _worker_main() -> None:
         artist = _clip(str(state.get("artist") or ""))
         kind = str(state.get("kind") or "audio").lower()
         playing = bool(state.get("playing"))
+        thumb = str(state.get("thumb") or "")
         try:
             duration = float(state.get("duration") or 0)
         except (TypeError, ValueError):
@@ -318,7 +334,16 @@ def _worker_main() -> None:
             continue
 
         sig = "|".join(
-            [title, artist, kind, "1" if playing else "0", str(int(duration)), cid, "a" if _use_agent else "l"]
+            [
+                title,
+                artist,
+                kind,
+                "1" if playing else "0",
+                str(int(duration)),
+                thumb[:96],
+                cid,
+                "a" if _use_agent else "l",
+            ]
         )
         now = time.time()
         if sig == last_sig and (now - last_push) < 15 and (rpc is not None or _use_agent):

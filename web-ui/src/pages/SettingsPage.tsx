@@ -417,8 +417,9 @@ export function SettingsPage() {
                   Discord Rich Presence
                 </Label>
                 <p className="text-muted-foreground text-xs">
-                  Трек в профиле Discord. Если Discord запущен от администратора — при первом Play
-                  подтверди UAC (агент RPC); дальше работает само.
+                  Трек и обложка (если есть HTTPS-cover у VK/Яндекс) в профиле Discord. Discord от
+                  администратора — при первом Play подтверди UAC. Запасная картинка: Portal → Rich
+                  Presence → Art Assets, имя файла <code className="text-xs">logo</code>.
                 </p>
               </div>
               <Switch

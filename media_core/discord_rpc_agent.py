@@ -76,6 +76,7 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
     title = _clip(str(data.get("title") or ""))
     artist = _clip(str(data.get("artist") or ""))
     kind = str(data.get("kind") or "audio").lower()
+    thumb = str(data.get("thumb") or "")
     try:
         current = float(data.get("current") or 0)
     except (TypeError, ValueError):
@@ -95,21 +96,26 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
             _last_sig = ""
             return {"ok": True, "cleared": True}
 
-        sig = "|".join([title, artist, kind, "1" if playing else "0", str(int(duration)), cid])
+        sig = "|".join(
+            [title, artist, kind, "1" if playing else "0", str(int(duration)), thumb[:96], cid]
+        )
         now = time.time()
         if sig == _last_sig and (now - _last_push) < 12 and _rpc is not None:
             return {"ok": True, "skipped": True}
 
         try:
+            from media_core.discord_presence import discord_cover_image
+            from pypresence.types import ActivityType, StatusDisplayType
+
             _ensure(cid)
             assert _rpc is not None
-            from pypresence.types import ActivityType, StatusDisplayType
 
             start_ts = int(now - max(0.0, current)) if playing else None
             end_ts = None
             if playing and duration > 1 and current < duration and start_ts is not None:
                 end_ts = int(start_ts + duration)
             is_video = kind == "video"
+            cover = discord_cover_image(thumb)
             kwargs: dict[str, Any] = {
                 "activity_type": ActivityType.WATCHING if is_video else ActivityType.LISTENING,
                 "status_display_type": StatusDisplayType.DETAILS,
@@ -122,7 +128,15 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
                 kwargs["start"] = start_ts
             if end_ts is not None:
                 kwargs["end"] = end_ts
-            _rpc.update(**kwargs)
+            if cover:
+                kwargs["large_image"] = cover
+            else:
+                kwargs["large_image"] = "logo"
+            try:
+                _rpc.update(**kwargs)
+            except Exception:
+                kwargs.pop("large_image", None)
+                _rpc.update(**kwargs)
             _last_sig = sig
             _last_push = now
             return {"ok": True}
