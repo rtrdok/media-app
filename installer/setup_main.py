@@ -14,7 +14,7 @@ from pathlib import Path
 from tkinter import filedialog
 
 APP_NAME = "Media App"
-APP_VERSION = "1.5.14"
+APP_VERSION = "1.5.15"
 DEFAULT_TARGET = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "MediaApp"
 START_MENU = (
     Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
@@ -264,10 +264,28 @@ def _restore_userdata(backup: Path | None, target: Path) -> None:
 
 
 def _stop_running_app() -> None:
-    """Закрыть Media App перед обновлением (иначе файлы залочены и установка ломается)."""
+    """Закрыть Media App (+ Discord RPC-агент) перед обновлением."""
+    import time
+    import urllib.request
+
     flags = 0
     if hasattr(subprocess, "CREATE_NO_WINDOW"):
         flags |= subprocess.CREATE_NO_WINDOW
+
+    # Агент слушает localhost даже будучи elevated — просим выйти мягко
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:17965/shutdown",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2.0):
+            pass
+        time.sleep(0.6)
+    except Exception:
+        pass
+
     try:
         subprocess.run(
             ["taskkill", "/F", "/IM", "MediaApp.exe", "/T"],
@@ -279,10 +297,36 @@ def _stop_running_app() -> None:
         )
     except Exception:
         pass
-    # дать Windows отпустить хендлы
-    import time
+    time.sleep(1.0)
 
-    time.sleep(0.8)
+    # Если elevated-агент всё ещё держит exe — ещё одна попытка через elevated taskkill
+    try:
+        still = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq MediaApp.exe", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            creationflags=flags,
+        )
+        if "MediaApp.exe" in (still.stdout or ""):
+            # UAC: taskkill от админа
+            try:
+                import ctypes
+
+                ctypes.windll.shell32.ShellExecuteW(
+                    None,
+                    "runas",
+                    "taskkill.exe",
+                    "/F /IM MediaApp.exe /T",
+                    None,
+                    0,
+                )
+                time.sleep(1.2)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def _replace_install_dir(src: Path, target: Path) -> None:
@@ -376,6 +420,15 @@ def _do_install(target: Path, desktop: bool, status) -> tuple[bool, str]:
                     pass
             except Exception:
                 pass
+        msg = str(e)
+        if "WinError 5" in msg or "Отказано в доступе" in msg or "Access is denied" in msg:
+            return (
+                False,
+                "Ошибка установки: отказано в доступе к MediaApp.exe.\n\n"
+                "Обычно файл держит Discord RPC-агент.\n"
+                "Закрой Media App → Диспетчер задач → сними все MediaApp.exe\n"
+                "(при необходимости «Запуск от имени администратора») → снова установщик.",
+            )
         return False, f"Ошибка установки:\n{e}"
     finally:
         if staging.exists() and staging.resolve() != target.resolve():
