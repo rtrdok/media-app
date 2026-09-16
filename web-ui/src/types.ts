@@ -122,6 +122,10 @@ export type PlayerTrack = {
   path?: string
   /** Обложка / превью для панели плеера. */
   thumb?: string
+  /** Страница трека (VK/Яндекс) — для fallback live → file. */
+  pageUrl?: string
+  /** Режим превью: live-прокси или локальный файл. */
+  streamMode?: "live" | "file"
 }
 
 export type AnimeCandidate = {

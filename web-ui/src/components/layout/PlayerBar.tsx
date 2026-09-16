@@ -23,6 +23,7 @@ import { useApp } from "@/context/AppProvider"
 import {
   applyMiniPlayerWindow,
   fetchPlayerCommands,
+  prepareMusicPreview,
   publishPlayerState,
   setWindowFullscreen,
 } from "@/lib/api"
@@ -38,6 +39,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     player,
     playing,
     setPlaying,
+    setPlayer,
     closePlayer,
     playNextInQueue,
     playPrevInQueue,
@@ -52,6 +54,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const nativeFs = useRef(false)
+  const liveFallbackRef = useRef<string | null>(null)
   const [progress, setProgress] = useState(0)
   const [current, setCurrent] = useState("0:00")
   const [currentSec, setCurrentSec] = useState(0)
@@ -112,11 +115,33 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   useEffect(() => {
     const el = mediaRef.current
     if (!el || !player?.src) return
-    const onError = () => setPlaying(false)
+    const onError = () => {
+      const pageUrl = player.pageUrl
+      const isLive =
+        player.streamMode === "live" || player.src.includes("/api/music/live")
+      if (pageUrl && isLive && liveFallbackRef.current !== player.src) {
+        liveFallbackRef.current = player.src
+        void prepareMusicPreview(pageUrl, "file").then((j) => {
+          if (!j.ok || !j.stream) {
+            setPlaying(false)
+            return
+          }
+          setPlayer({
+            ...player,
+            src: j.stream,
+            streamMode: "file",
+            path: filePathFromPlayerSrc(j.stream) || player.path,
+          })
+          setPlaying(true)
+        })
+        return
+      }
+      setPlaying(false)
+    }
     el.addEventListener("error", onError)
     el.load()
     return () => el.removeEventListener("error", onError)
-  }, [player?.src, setPlaying])
+  }, [player, setPlaying, setPlayer])
 
   useEffect(() => {
     const el = mediaRef.current

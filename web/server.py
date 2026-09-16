@@ -427,6 +427,11 @@ class UrlIn(BaseModel):
     url: str
 
 
+class MusicPreviewIn(BaseModel):
+    url: str = ""
+    prefer: str = "quick"  # quick | file
+
+
 class YandexDownloadIn(BaseModel):
     urls: list[str] = []
 
@@ -1689,9 +1694,41 @@ async def vk_download(body: VkDownloadIn):
     return {"ok": True, "ids": ids, "count": len(ids), "queue_len": len(_queue)}
 
 
+@app.get("/api/music/live")
+async def music_live(url: str):
+    """Прокси-стрим с CDN без ожидания полного файла (быстрый старт в плеере)."""
+    from fastapi.responses import StreamingResponse
+
+    from media_core.music_preview import iter_upstream_audio, resolve_music_stream
+
+    page = (url or "").strip()
+    if not page:
+        raise HTTPException(400, "url required")
+    info = await resolve_music_stream(page)
+    if not info or not info.get("stream_url"):
+        raise HTTPException(404, "stream unavailable")
+    stream_url = str(info["stream_url"])
+    if "m3u8" in stream_url.lower() or "mpegurl" in stream_url.lower():
+        raise HTTPException(415, "hls — используй file preview")
+
+    async def gen():
+        async for chunk in iter_upstream_audio(page):
+            yield chunk
+
+    return StreamingResponse(
+        gen(),
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "no-store",
+            "Accept-Ranges": "none",
+            "X-Media-Stream-Mode": "live",
+        },
+    )
+
+
 @app.get("/api/music/stream")
 async def music_stream(url: str):
-    """Превью: готовит локальный mp3 и отдаёт файлом (WebView2 дружит с FileResponse)."""
+    """Превью файлом (WebView2 стабильнее на FileResponse)."""
     from media_core.music_preview import materialize_preview
 
     page = (url or "").strip()
@@ -1715,15 +1752,19 @@ async def music_stream(url: str):
 
 
 @app.post("/api/music/preview")
-async def music_preview(body: UrlIn):
-    """Готовит превью и возвращает готовый URL для плеера."""
-    from media_core.music_preview import materialize_preview
+async def music_preview(body: MusicPreviewIn):
+    """Быстрый стрим в плеер; prefer=file — дождаться полного локального mp3."""
+    from media_core.music_preview import materialize_preview, prepare_quick_preview
 
     page = (body.url or "").strip()
     if not page:
         return {"ok": False, "error": "url required"}
+    prefer = (body.prefer or "quick").strip().lower()
     try:
-        meta = await asyncio.wait_for(materialize_preview(page), timeout=90)
+        if prefer == "file":
+            meta = await asyncio.wait_for(materialize_preview(page), timeout=90)
+        else:
+            meta = await asyncio.wait_for(prepare_quick_preview(page), timeout=45)
     except asyncio.TimeoutError:
         return {"ok": False, "error": "timeout"}
     if not meta or not meta.get("stream"):
@@ -1735,6 +1776,7 @@ async def music_preview(body: UrlIn):
         "artist": meta.get("artist") or "",
         "cover": meta.get("cover") or "",
         "label": meta.get("label") or "",
+        "mode": meta.get("mode") or "live",
     }
 
 

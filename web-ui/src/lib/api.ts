@@ -505,18 +505,20 @@ export function musicStreamUrl(pageUrl: string) {
   return `/api/music/stream?url=${encodeURIComponent(pageUrl)}`
 }
 
-/** Готовит локальный mp3 для превью и возвращает URL для <audio>. */
-export function prepareMusicPreview(pageUrl: string) {
+/** Превью в плеер: quick — сразу live-стрим; file — полный локальный mp3. */
+export function prepareMusicPreview(pageUrl: string, prefer: "quick" | "file" = "quick") {
   return json<{
     ok: boolean
     stream?: string
     title?: string
     artist?: string
     cover?: string
+    label?: string
+    mode?: "live" | "file" | string
     error?: string
   }>("/api/music/preview", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: pageUrl }),
+    body: JSON.stringify({ url: pageUrl, prefer }),
   })
 }

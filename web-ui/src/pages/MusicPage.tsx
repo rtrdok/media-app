@@ -211,6 +211,8 @@ export function MusicPage() {
         durationLabel: t.duration_label || undefined,
         kind: "audio",
         thumb: j.cover || t.cover || undefined,
+        pageUrl: t.url,
+        streamMode: j.mode === "file" ? "file" : "live",
       })
       setPlaying(true)
     } catch (e) {
