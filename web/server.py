@@ -351,6 +351,8 @@ class SettingsIn(BaseModel):
     proxy_list: str | None = None
     onboarding_done: bool | None = None
     folders_by_service: bool | None = None
+    discord_rpc: bool | None = None
+    discord_client_id: str | None = None
 
 
 class LyricsIn(BaseModel):
@@ -801,7 +803,15 @@ async def save_settings(body: SettingsIn):
         proxy_list=body.proxy_list,
         onboarding_done=body.onboarding_done,
         folders_by_service=body.folders_by_service,
+        discord_rpc=body.discord_rpc,
+        discord_client_id=body.discord_client_id,
     )
+    try:
+        from media_core.discord_rpc import on_settings_changed
+
+        on_settings_changed()
+    except Exception:
+        pass
     if body.desktop_shortcut != prev_shortcut or body.autostart != prev_autostart:
         try:
             from media_core.windows_integration import apply_integration
@@ -1262,13 +1272,21 @@ class PlayerPublishIn(BaseModel):
     volume: float | None = None
     has_track: bool | None = None
     thumb: str | None = None
+    kind: str | None = None
 
 
 @app.post("/api/player/publish")
 async def api_player_publish(body: PlayerPublishIn):
     from media_core.player_bridge import publish_state
 
-    return {"ok": True, **publish_state(**body.model_dump())}
+    state = publish_state(**body.model_dump())
+    try:
+        from media_core.discord_rpc import sync_from_player
+
+        sync_from_player(state)
+    except Exception:
+        pass
+    return {"ok": True, **state}
 
 
 class PlayerControlIn(BaseModel):

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-APP_VERSION = "1.5.9"
+APP_VERSION = "1.5.10"
 
 # owner/repo — публичный GitHub Releases для автообновления
 GITHUB_REPO = "rtrdok/media-app"
+
+# Discord Rich Presence Application ID (публичный). Задай в Настройках или сюда.
+# Создать: https://discord.com/developers/applications → New Application → скопировать Application ID
+DISCORD_CLIENT_ID = ""
 
 CANCELLED = object()
 

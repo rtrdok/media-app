@@ -15,6 +15,7 @@ _state: dict = {
     "volume": 0.85,
     "has_track": False,
     "thumb": "",
+    "kind": "audio",
     "updated_at": 0.0,
 }
 _commands: list[dict] = []

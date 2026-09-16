@@ -1,3 +1,9 @@
+## [1.5.10] — 2026-09-16
+
+### Добавлено
+- Discord Rich Presence: трек в профиле Discord («Listening to Media App») при прослушивании
+  (Настройки → Application ID с discord.com/developers)
+
 ## [1.5.9] — 2026-09-16
 
 ### Улучшено

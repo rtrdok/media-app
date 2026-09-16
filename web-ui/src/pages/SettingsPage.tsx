@@ -57,6 +57,8 @@ export function SettingsPage() {
         use_proxy: state.settings.use_proxy ?? false,
         proxy_list: state.settings.proxy_list ?? "",
         folders_by_service: state.settings.folders_by_service ?? true,
+        discord_rpc: state.settings.discord_rpc ?? true,
+        discord_client_id: state.settings.discord_client_id ?? "",
       })
     }
   }, [state?.settings])
@@ -411,6 +413,45 @@ export function SettingsPage() {
             </div>
             <div className="flex items-center justify-between gap-8">
               <div>
+                <Label htmlFor="discord-rpc" className="mb-1 block">
+                  Discord Rich Presence
+                </Label>
+                <p className="text-muted-foreground text-xs">
+                  Показывать трек в профиле Discord («Listening to Media App»). Нужен Discord на этом ПК.
+                </p>
+              </div>
+              <Switch
+                id="discord-rpc"
+                checked={draft.discord_rpc !== false}
+                onCheckedChange={(v) => patch({ discord_rpc: v })}
+              />
+            </div>
+            {draft.discord_rpc !== false ? (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div className="min-w-0 flex-1">
+                  <Label className="mb-1 block">Discord Application ID</Label>
+                  <p className="text-muted-foreground mb-2 text-xs">
+                    developers/applications → New Application (имя Media App) → скопировать Application ID
+                  </p>
+                  <input
+                    value={draft.discord_client_id || ""}
+                    onChange={(e) => patch({ discord_client_id: e.target.value.trim() })}
+                    placeholder="например 1234567890123456789"
+                    className="border-input bg-background w-full max-w-md rounded-lg border px-3 py-2 font-mono text-sm"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => void openUrl("https://discord.com/developers/applications")}
+                >
+                  Открыть портал
+                </Button>
+              </div>
+            ) : null}
+            <div className="flex items-center justify-between gap-8">
+              <div>
                 <Label className="mb-1 block">Хранить кэш превью (дней)</Label>
                 <p className="text-muted-foreground text-xs">Старые временные файлы удаляются автоматически</p>
               </div>
@@ -640,6 +681,8 @@ export function SettingsPage() {
                 check_disk_space: state.settings.check_disk_space ?? true,
                 max_concurrent_downloads: state.settings.max_concurrent_downloads ?? 3,
                 folders_by_service: state.settings.folders_by_service ?? true,
+                discord_rpc: state.settings.discord_rpc ?? true,
+                discord_client_id: state.settings.discord_client_id ?? "",
               })
             }
           }}

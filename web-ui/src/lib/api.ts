@@ -190,6 +190,7 @@ export function publishPlayerState(body: {
   volume?: number
   has_track?: boolean
   thumb?: string
+  kind?: "audio" | "video" | string
 }) {
   return fetch("/api/player/publish", {
     method: "POST",

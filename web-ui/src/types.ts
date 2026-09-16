@@ -60,6 +60,8 @@ export type AppSettings = {
   proxy_list?: string
   onboarding_done?: boolean
   folders_by_service?: boolean
+  discord_rpc?: boolean
+  discord_client_id?: string
 }
 
 export type AppState = {

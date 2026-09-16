@@ -31,6 +31,8 @@ _DEFAULTS = {
     "proxy_list": "",
     "onboarding_done": False,
     "folders_by_service": True,
+    "discord_rpc": True,
+    "discord_client_id": "",
 }
 
 

@@ -243,9 +243,12 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     }
   }, [isVideo, playing, player?.src, theater])
 
-  // Мост с отдельным мини-окном (главное скрыто, аудио здесь)
+  // Мост с мини-окном + Discord Rich Presence
   useEffect(() => {
-    if (!hasSrc || !miniPlayer) return
+    if (!hasSrc) {
+      void publishPlayerState({ has_track: false, playing: false })
+      return
+    }
     const publish = () => {
       const el = mediaRef.current
       void publishPlayerState({
@@ -257,12 +260,23 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         volume: volumeRef.current,
         has_track: true,
         thumb: player?.thumb || "",
+        kind: player?.kind || (player?.src && isVideoSrc(player.src) ? "video" : "audio"),
       })
     }
     publish()
-    const id = window.setInterval(publish, 500)
+    const id = window.setInterval(publish, miniPlayer ? 500 : 2000)
     return () => window.clearInterval(id)
-  }, [hasSrc, miniPlayer, player?.title, player?.artist, player?.thumb, playing, volume])
+  }, [
+    hasSrc,
+    miniPlayer,
+    player?.title,
+    player?.artist,
+    player?.thumb,
+    player?.kind,
+    player?.src,
+    playing,
+    volume,
+  ])
 
   useEffect(() => {
     if (!hasSrc || !miniPlayer) return
