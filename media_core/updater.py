@@ -76,8 +76,10 @@ def _github_headers() -> dict[str, str]:
 
 
 def _fetch_json(url: str) -> dict:
+    """JSON с GitHub API — всегда напрямую (системный VPN/PAC для Cursor не трогаем)."""
     req = urllib.request.Request(url, headers=_github_headers())
-    with urllib.request.urlopen(req, timeout=20) as r:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=20) as r:
         return json.loads(r.read().decode("utf-8", errors="replace"))
 
 
@@ -189,15 +191,14 @@ def _download_headers(url: str) -> dict[str, str]:
     }
 
 
-def _open_download(url: str, *, bypass_proxy: bool, connect_timeout: float = 20.0):
-    """Открывает поток скачивания. bypass_proxy=True игнорирует системный HTTP(S)_PROXY."""
+def _open_download_requests(url: str, *, connect_timeout: float = 15.0):
+    """Прямое скачивание через requests (игнор env/WinINET прокси)."""
     import requests
 
     headers = _download_headers(url)
     sess = requests.Session()
-    if bypass_proxy:
-        sess.trust_env = False
-        sess.proxies = {"http": None, "https": None}
+    sess.trust_env = False
+    sess.proxies = {"http": None, "https": None}
     r = sess.get(
         url,
         headers=headers,
@@ -220,100 +221,192 @@ def _open_download(url: str, *, bypass_proxy: bool, connect_timeout: float = 20.
     return total, _iter()
 
 
-def _download_file(url: str, dest: Path) -> None:
-    """Скачивает ZIP. Пробует системный прокси и прямое подключение (короткий connect-timeout)."""
+def _download_via_curl(url: str, dest: Path) -> None:
+    """Запасной путь: curl.exe --noproxy * (обходит зависший WinINET 127.0.0.1)."""
     import time
 
-    last_err: Exception | None = None
-    proxies = {}
-    try:
-        proxies = urllib.request.getproxies() or {}
-    except Exception:
-        proxies = {}
+    from media_core.utils import subprocess_no_window_kwargs
 
-    modes: list[tuple[bool, str]] = []
-    if proxies:
-        # локальный VPN/Clash часто висит на больших файлах — сначала напрямую
-        proxy_vals = " ".join(str(v) for v in proxies.values()).lower()
-        local = "127.0.0.1" in proxy_vals or "localhost" in proxy_vals
-        if local:
-            modes = [
-                (True, "напрямую…"),
-                (False, "через локальный прокси…"),
-            ]
-        else:
-            modes = [
-                (False, "через прокси…"),
-                (True, "напрямую…"),
-            ]
-    else:
-        modes = [(True, "подключение…")]
+    curl = shutil.which("curl") or shutil.which("curl.exe")
+    if not curl:
+        raise RuntimeError("curl.exe не найден")
 
-    for bypass, label in modes:
+    if dest.is_file():
         try:
-            _set_job(message=f"Скачивание… {label}", pct=0.0, bytes_done=0, bytes_total=0)
-            log(f"Update download bypass_proxy={bypass} url={url}")
-            total, chunks = _open_download(url, bypass_proxy=bypass, connect_timeout=18.0)
+            dest.unlink()
+        except OSError:
+            pass
+
+    cmd = [
+        curl,
+        "-L",
+        "--fail",
+        "--noproxy",
+        "*",
+        "--connect-timeout",
+        "15",
+        "--max-time",
+        "900",
+        "-A",
+        f"MediaApp/{APP_VERSION}",
+        "-o",
+        str(dest),
+        url,
+    ]
+    env = os.environ.copy()
+    for k in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ):
+        env.pop(k, None)
+    env["NO_PROXY"] = "*"
+    env["no_proxy"] = "*"
+    _set_job(message="Скачивание… через curl (без системного прокси)…", pct=0.0)
+    log(f"Update download via curl: {url}")
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env=env,
+        **subprocess_no_window_kwargs(),
+    )
+    t0 = time.monotonic()
+    last_done = 0
+    last_t = t0
+    while proc.poll() is None:
+        time.sleep(0.35)
+        done = dest.stat().st_size if dest.is_file() else 0
+        now = time.monotonic()
+        dt = max(0.001, now - last_t)
+        speed = (done - last_done) / dt
+        last_t = now
+        last_done = done
+        _set_job(
+            pct=0.0,
+            bytes_done=done,
+            bytes_total=0,
+            speed_bps=round(speed, 1),
+            message=f"Скачивание… {_fmt_bytes(done)} · {_fmt_bytes(speed)}/с",
+        )
+        if now - t0 > 900:
+            proc.kill()
+            raise TimeoutError("curl: превышено время скачивания")
+
+    err = (proc.stderr.read() if proc.stderr else b"").decode("utf-8", errors="replace")
+    if proc.returncode != 0:
+        raise RuntimeError(f"curl exit {proc.returncode}: {err[-300:]}")
+    if not dest.is_file() or dest.stat().st_size < 1024:
+        raise RuntimeError("curl: пустой файл")
+    size = dest.stat().st_size
+    _set_job(pct=100.0, bytes_done=size, bytes_total=size, message=f"Скачано {_fmt_bytes(size)}")
+
+
+def _write_stream_to_file(dest: Path, total: int, chunks) -> None:
+    import time
+
+    done = 0
+    t0 = time.monotonic()
+    last_t = t0
+    last_done = 0
+    speed = 0.0
+    with open(dest, "wb") as out:
+        for chunk in chunks:
+            out.write(chunk)
+            done += len(chunk)
+            now = time.monotonic()
+            if now - last_t >= 0.25:
+                dt = max(0.001, now - last_t)
+                speed = (done - last_done) / dt
+                last_t = now
+                last_done = done
+            elapsed = max(0.001, now - t0)
+            if speed <= 0:
+                speed = done / elapsed
+            pct = round(100.0 * done / total, 1) if total else 0.0
+            if total:
+                msg = (
+                    f"Скачивание… {pct}% · {_fmt_bytes(done)} / {_fmt_bytes(total)} · "
+                    f"{_fmt_bytes(speed)}/с"
+                )
+            else:
+                msg = f"Скачивание… {_fmt_bytes(done)} · {_fmt_bytes(speed)}/с"
             _set_job(
-                message=(
-                    f"Скачивание… 0% · 0 Б / {_fmt_bytes(total)}"
-                    if total
-                    else "Скачивание… соединение установлено"
-                ),
-                bytes_total=total,
-            )
-            done = 0
-            t0 = time.monotonic()
-            last_t = t0
-            last_done = 0
-            speed = 0.0
-            with open(dest, "wb") as out:
-                for chunk in chunks:
-                    out.write(chunk)
-                    done += len(chunk)
-                    now = time.monotonic()
-                    if now - last_t >= 0.25:
-                        dt = max(0.001, now - last_t)
-                        speed = (done - last_done) / dt
-                        last_t = now
-                        last_done = done
-                    elapsed = max(0.001, now - t0)
-                    if speed <= 0:
-                        speed = done / elapsed
-                    pct = round(100.0 * done / total, 1) if total else 0.0
-                    if total:
-                        msg = (
-                            f"Скачивание… {pct}% · {_fmt_bytes(done)} / {_fmt_bytes(total)} · "
-                            f"{_fmt_bytes(speed)}/с"
-                        )
-                    else:
-                        msg = f"Скачивание… {_fmt_bytes(done)} · {_fmt_bytes(speed)}/с"
-                    _set_job(
-                        pct=pct,
-                        bytes_done=done,
-                        bytes_total=total,
-                        speed_bps=round(speed, 1),
-                        message=msg,
-                    )
-            _set_job(
-                pct=100.0 if total else (100.0 if done else 0.0),
+                pct=pct,
                 bytes_done=done,
-                bytes_total=total or done,
-                message=f"Скачано {_fmt_bytes(done)}",
+                bytes_total=total,
+                speed_bps=round(speed, 1),
+                message=msg,
             )
-            return
-        except Exception as e:
-            last_err = e
-            log(f"Update download failed (bypass_proxy={bypass}): {e}")
+    _set_job(
+        pct=100.0 if total else (100.0 if done else 0.0),
+        bytes_done=done,
+        bytes_total=total or done,
+        message=f"Скачано {_fmt_bytes(done)}",
+    )
+
+
+def _download_file(url: str, dest: Path) -> None:
+    """Скачивает ZIP напрямую, без системного VPN/PAC (они часто для Cursor).
+
+    1) curl.exe --noproxy * (надёжнее обходит WinINET 127.0.0.1)
+    2) requests без прокси (короткий connect-timeout)
+    """
+    last_err: Exception | None = None
+    manual = "https://github.com/rtrdok/media-app/releases/latest"
+
+    # 1) curl first — WinINET leftover proxy hangs requests forever on some PCs
+    try:
+        _download_via_curl(url, dest)
+        return
+    except Exception as e:
+        last_err = e
+        log(f"Update download curl failed: {e}")
+        try:
+            if dest.is_file():
+                dest.unlink()
+        except OSError:
+            pass
+
+    # 2) requests direct with hard wall-clock budget on connect
+    try:
+        _set_job(message="Скачивание… напрямую…", pct=0.0, bytes_done=0, bytes_total=0)
+        log(f"Update download requests direct url={url}")
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(_open_download_requests, url, connect_timeout=10.0)
             try:
-                if dest.is_file():
-                    dest.unlink()
-            except OSError:
-                pass
-            continue
+                total, chunks = fut.result(timeout=25.0)
+            except FuturesTimeout as e:
+                raise TimeoutError("requests: нет ответа за 25 с") from e
+        _set_job(
+            message=(
+                f"Скачивание… 0% · 0 Б / {_fmt_bytes(total)}"
+                if total
+                else "Скачивание… соединение установлено"
+            ),
+            bytes_total=total,
+        )
+        _write_stream_to_file(dest, total, chunks)
+        return
+    except Exception as e:
+        last_err = e
+        log(f"Update download requests failed: {e}")
+        try:
+            if dest.is_file():
+                dest.unlink()
+        except OSError:
+            pass
 
     raise RuntimeError(
-        f"Не удалось скачать обновление. Проверьте VPN/прокси или скачайте MediaApp.zip вручную. ({last_err})"
+        f"Не удалось скачать обновление (системный прокси Windows часто мешает). "
+        f"Скачайте MediaApp-Installer.exe вручную: {manual} ({last_err})"
     )
 
 
