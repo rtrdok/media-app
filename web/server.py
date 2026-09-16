@@ -54,6 +54,14 @@ from media_core.utils import (
 STATIC = RESOURCE_DIR / "web" / "static"
 THUMBS = BASE_DIR / "file_cache" / "thumbs"
 
+if not STATIC.is_dir():
+    # Частая причина: битое обновление поверх запущенного exe (1.5.5 и раньше).
+    raise RuntimeError(
+        f"Нет папки интерфейса:\n{STATIC}\n\n"
+        "Закрой Media App и поставь заново через MediaApp-Installer.exe "
+        "(Обновить / Переустановить)."
+    )
+
 _LISTEN_PORT = 17865
 _show_window_cb = None
 _fullscreen_cb = None
@@ -1409,17 +1417,26 @@ async def extension_job(body: ExtensionJobIn, request: Request):
     fmt = (body.fmt or "").strip().upper()
     if not fmt:
         fmt = "MP3" if kind == "audio" else "MP4"
+    if fmt == "MP3":
+        kind = "audio"
+    # VK/Яндекс/SoundCloud — всегда аудио, даже если в расширении стоит «Видео»
+    if is_track_download_url(url):
+        kind = "audio"
+        if fmt not in ("MP3", "M4A", "OPUS", "FLAC"):
+            fmt = "MP3"
     quality = (body.quality or "best").strip() or "best"
     item = _enqueue_one(
         JobIn(url=url, kind=kind, quality=quality, fmt=fmt, start="", end="", track="")
     )
     _schedule_pump()
-    _last["message"] = f"Из браузера в очередь: {item.get('title') or url}"
+    _last["message"] = f"Из браузера в очередь: {item.get('title') or url} ({fmt} · {quality})"
     return {
         "ok": True,
         "id": item["id"],
         "queue_len": len(_queue),
         "kind": kind,
+        "quality": quality,
+        "fmt": fmt,
         "title": item.get("title") or url,
     }
 

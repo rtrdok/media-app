@@ -574,10 +574,11 @@ export function SettingsPage() {
             <div className="border-border space-y-3 border-t pt-4">
               <p className="text-sm font-medium">Расширение для браузера</p>
               <p className="text-muted-foreground text-sm">
-                Из браузера: ссылка сразу в очередь Media App и/или cookies
+                Из браузера: ссылка сразу в очередь Media App (качество и формат
+                задаёшь один раз в попапе расширения) и/или cookies
                 (YouTube, Instagram, VK, Яндекс…). Media App должно быть запущено.
                 После установки: «Отправить в Media App» — ссылка в очередь;
-                «Отправить cookies» — авторизация YouTube / Instagram / VK / Яндекс.
+                «Отправить cookies» — авторизация.
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button

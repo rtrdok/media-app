@@ -14,7 +14,7 @@ from pathlib import Path
 from tkinter import filedialog
 
 APP_NAME = "Media App"
-APP_VERSION = "1.5.5"
+APP_VERSION = "1.5.6"
 DEFAULT_TARGET = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "MediaApp"
 START_MENU = (
     Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
@@ -263,15 +263,90 @@ def _restore_userdata(backup: Path | None, target: Path) -> None:
     shutil.rmtree(backup, ignore_errors=True)
 
 
+def _stop_running_app() -> None:
+    """Закрыть Media App перед обновлением (иначе файлы залочены и установка ломается)."""
+    flags = 0
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        flags |= subprocess.CREATE_NO_WINDOW
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "MediaApp.exe", "/T"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+            creationflags=flags,
+        )
+    except Exception:
+        pass
+    # дать Windows отпустить хендлы
+    import time
+
+    time.sleep(0.8)
+
+
+def _replace_install_dir(src: Path, target: Path) -> None:
+    """Заменить папку установки. Никогда не move() внутрь существующего target.
+
+    Иначе при залоченных файлах получается MediaApp\\MediaApp_install_tmp и битый _internal.
+    """
+    parent = target.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    old = parent / f"MediaApp_old_{os.getpid()}"
+    if old.exists():
+        shutil.rmtree(old, ignore_errors=True)
+
+    if target.exists():
+        try:
+            target.rename(old)
+        except OSError:
+            shutil.rmtree(target, ignore_errors=False)
+
+    try:
+        shutil.move(str(src), str(target))
+    except Exception:
+        if old.exists() and not target.exists():
+            try:
+                old.rename(target)
+            except OSError:
+                pass
+        raise
+
+    if old.exists():
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def _verify_install(target: Path) -> str | None:
+    if not (target / "MediaApp.exe").is_file():
+        return f"Не найден MediaApp.exe в\n{target}"
+    index = target / "_internal" / "web" / "static" / "index.html"
+    if not index.is_file():
+        index = target / "web" / "static" / "index.html"
+    if not index.is_file():
+        return (
+            "Неполная установка (нет web/static).\n"
+            "Закрой Media App полностью и запусти установщик ещё раз."
+        )
+    return None
+
+
 def _do_install(target: Path, desktop: bool, status) -> tuple[bool, str]:
     zpath = _payload_zip()
     if not zpath.is_file():
         return False, f"Не найден payload.zip:\n{zpath}"
 
+    status("Закрываю Media App…")
+    _stop_running_app()
+
     status("Распаковка…")
-    staging = target.parent / "MediaApp_install_tmp"
+    staging = target.parent / f"MediaApp_install_tmp_{os.getpid()}"
     if staging.exists():
         shutil.rmtree(staging, ignore_errors=True)
+    # подчистить хвосты прошлых сбоев
+    for leftover in target.parent.glob("MediaApp_install_tmp*"):
+        shutil.rmtree(leftover, ignore_errors=True)
+    for leftover in target.parent.glob("MediaApp_old_*"):
+        shutil.rmtree(leftover, ignore_errors=True)
     staging.mkdir(parents=True, exist_ok=True)
     userdata_bak = None
 
@@ -287,26 +362,30 @@ def _do_install(target: Path, desktop: bool, status) -> tuple[bool, str]:
         status("Копирование файлов…")
         if target.exists():
             userdata_bak = _backup_userdata(target)
-            shutil.rmtree(target, ignore_errors=True)
-        shutil.move(str(src), str(target))
+        _replace_install_dir(src, target)
         _restore_userdata(userdata_bak, target)
         userdata_bak = None
         _write_meta(target)
     except Exception as e:
         if userdata_bak:
             try:
-                _restore_userdata(userdata_bak, target)
+                if target.exists():
+                    _restore_userdata(userdata_bak, target)
+                else:
+                    # откат невозможен без папки — оставим бэкап рядом
+                    pass
             except Exception:
                 pass
         return False, f"Ошибка установки:\n{e}"
     finally:
-        if staging.exists() and staging != target:
+        if staging.exists() and staging.resolve() != target.resolve():
             shutil.rmtree(staging, ignore_errors=True)
 
-    exe = target / "MediaApp.exe"
-    if not exe.is_file():
-        return False, f"Не найден MediaApp.exe в\n{target}"
+    bad = _verify_install(target)
+    if bad:
+        return False, bad
 
+    exe = target / "MediaApp.exe"
     ico = _bundle_dir() / "app.ico"
     if ico.is_file():
         branding = target / "branding"

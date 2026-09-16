@@ -112,11 +112,35 @@ async function sendCookies(overrideToken) {
   return { port, count: j.count || count };
 }
 
-async function sendJob(pageUrl, overrideToken) {
+async function loadDownloadPrefs() {
+  const a = api();
+  try {
+    const data = await a.storage.local.get({
+      downloadPrefs: { kind: "auto", quality: "best", fmt: "MP4" },
+    });
+    const p = data.downloadPrefs || {};
+    return {
+      kind: String(p.kind || "auto"),
+      quality: String(p.quality || "best"),
+      fmt: String(p.fmt || "MP4").toUpperCase(),
+    };
+  } catch (_) {
+    return { kind: "auto", quality: "best", fmt: "MP4" };
+  }
+}
+
+async function sendJob(pageUrl, overrideToken, overridePrefs) {
   const url = String(pageUrl || "").trim();
   if (!url || !/^https?:\/\//i.test(url)) {
     throw new Error("Нет ссылки на странице");
   }
+  const prefs = overridePrefs && typeof overridePrefs === "object"
+    ? {
+        kind: String(overridePrefs.kind || "auto"),
+        quality: String(overridePrefs.quality || "best"),
+        fmt: String(overridePrefs.fmt || "MP4").toUpperCase(),
+      }
+    : await loadDownloadPrefs();
   const { ports, token: cfgToken } = bridgeConfig();
   const token = String(overrideToken || cfgToken || "");
   const port = await findBridge(ports, token);
@@ -129,7 +153,12 @@ async function sendJob(pageUrl, overrideToken) {
       "Content-Type": "application/json",
       ...(token ? { "X-Media-Token": token } : {}),
     },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({
+      url,
+      kind: prefs.kind === "auto" ? "" : prefs.kind,
+      quality: prefs.quality,
+      fmt: prefs.fmt,
+    }),
   });
   let j = {};
   try {
@@ -145,7 +174,15 @@ async function sendJob(pageUrl, overrideToken) {
     }
     throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
-  return { port, id: j.id, kind: j.kind, title: j.title || url, queue_len: j.queue_len };
+  return {
+    port,
+    id: j.id,
+    kind: j.kind,
+    quality: j.quality || prefs.quality,
+    fmt: j.fmt || prefs.fmt,
+    title: j.title || url,
+    queue_len: j.queue_len,
+  };
 }
 
 function ensureContextMenus() {
@@ -186,7 +223,7 @@ api().runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg && msg.type === "SEND_JOB") {
-    sendJob(msg.url, msg.token)
+    sendJob(msg.url, msg.token, msg.prefs)
       .then((r) => sendResponse({ ok: true, ...r }))
       .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
     return true;
