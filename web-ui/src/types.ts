@@ -59,6 +59,7 @@ export type AppSettings = {
   use_proxy?: boolean
   proxy_list?: string
   onboarding_done?: boolean
+  folders_by_service?: boolean
 }
 
 export type AppState = {

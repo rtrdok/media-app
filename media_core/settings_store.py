@@ -30,6 +30,7 @@ _DEFAULTS = {
     "use_proxy": False,
     "proxy_list": "",
     "onboarding_done": False,
+    "folders_by_service": True,
 }
 
 
@@ -73,6 +74,44 @@ def get_download_dir() -> str:
 
 def set_download_dir(path: str) -> None:
     update_settings(download_dir=path)
+
+
+_SERVICE_FOLDERS = {
+    "youtube": "YouTube",
+    "tiktok": "TikTok",
+    "instagram": "Instagram",
+    "vk": "VK",
+    "rutube": "RuTube",
+    "soundcloud": "SoundCloud",
+    "yandex_music": "Yandex Music",
+    "coub": "Coub",
+    "x": "X",
+    "twitch": "Twitch",
+    "venbox": "VenBox",
+    "direct": "Direct",
+    "generic": "Other",
+}
+
+
+def service_folder_name(platform: str | None) -> str:
+    key = (platform or "").strip().lower()
+    return _SERVICE_FOLDERS.get(key) or "Other"
+
+
+def get_download_dir_for_url(url: str = "", platform: str | None = None) -> str:
+    """Корневая папка загрузок или подпапка сервиса (YouTube, VK, …)."""
+    root = Path(get_download_dir())
+    if not get_bool("folders_by_service", True):
+        root.mkdir(parents=True, exist_ok=True)
+        return str(root)
+    if not platform:
+        from media_core.utils import detect_platform
+
+        platform = detect_platform(url or "") if url else None
+    folder = service_folder_name(platform)
+    dest = root / folder
+    dest.mkdir(parents=True, exist_ok=True)
+    return str(dest)
 
 
 def get_theme() -> str:

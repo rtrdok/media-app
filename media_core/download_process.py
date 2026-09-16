@@ -14,7 +14,7 @@ from media_core.download_vk_audio import download_vk_audio
 from media_core.download_yandex_music import download_yandex_music
 from media_core.download_ytdlp import download_ytdlp
 from media_core.file_cache import cache_key, copy_for_send, get_cached_path, store_cached_path
-from media_core.settings_store import get_download_dir, get_rate_limit, get_subtitles_mode
+from media_core.settings_store import get_download_dir_for_url, get_rate_limit, get_subtitles_mode
 from media_core.utils import (
     cache_display_filename,
     detect_platform,
@@ -32,7 +32,7 @@ def get_last_download_error():
 
 
 def save_to_downloads(src_path: str, url: str, audio_only: bool, title: str | None = None) -> str:
-    dest_dir = Path(get_download_dir())
+    dest_dir = Path(get_download_dir_for_url(url))
     dest_dir.mkdir(parents=True, exist_ok=True)
     name = cache_display_filename(url, audio_only, src_path, track=title)
     dest = dest_dir / name
@@ -92,7 +92,7 @@ async def process_url(
         from media_core.direct_download import download_direct
 
         path = await asyncio.to_thread(
-            download_direct, url, get_download_dir(), progress_state,
+            download_direct, url, get_download_dir_for_url(url, platform), progress_state,
         )
     elif platform == "instagram":
         from media_core.utils import is_instagram_stories_url, youtube_cookies_active

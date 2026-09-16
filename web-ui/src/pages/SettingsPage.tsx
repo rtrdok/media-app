@@ -56,6 +56,7 @@ export function SettingsPage() {
         max_concurrent_downloads: state.settings.max_concurrent_downloads ?? 3,
         use_proxy: state.settings.use_proxy ?? false,
         proxy_list: state.settings.proxy_list ?? "",
+        folders_by_service: state.settings.folders_by_service ?? true,
       })
     }
   }, [state?.settings])
@@ -303,6 +304,21 @@ export function SettingsPage() {
               >
                 Изменить
               </Button>
+            </div>
+            <div className="flex items-center justify-between gap-8">
+              <div>
+                <Label htmlFor="folders-by-service" className="mb-1 block">
+                  Папки по сервисам
+                </Label>
+                <p className="text-muted-foreground text-xs">
+                  YouTube, VK, TikTok и др. — каждый в свою подпапку внутри папки загрузок.
+                </p>
+              </div>
+              <Switch
+                id="folders-by-service"
+                checked={draft.folders_by_service !== false}
+                onCheckedChange={(v) => patch({ folders_by_service: v })}
+              />
             </div>
             <div className="flex items-center justify-between gap-8">
               <Label htmlFor="disk">Проверять свободное место перед загрузкой</Label>
@@ -623,6 +639,7 @@ export function SettingsPage() {
                 ...state.settings,
                 check_disk_space: state.settings.check_disk_space ?? true,
                 max_concurrent_downloads: state.settings.max_concurrent_downloads ?? 3,
+                folders_by_service: state.settings.folders_by_service ?? true,
               })
             }
           }}

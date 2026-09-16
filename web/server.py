@@ -350,6 +350,7 @@ class SettingsIn(BaseModel):
     use_proxy: bool | None = None
     proxy_list: str | None = None
     onboarding_done: bool | None = None
+    folders_by_service: bool | None = None
 
 
 class LyricsIn(BaseModel):
@@ -779,6 +780,7 @@ async def save_settings(body: SettingsIn):
         use_proxy=body.use_proxy,
         proxy_list=body.proxy_list,
         onboarding_done=body.onboarding_done,
+        folders_by_service=body.folders_by_service,
     )
     if body.desktop_shortcut != prev_shortcut or body.autostart != prev_autostart:
         try:
@@ -2063,7 +2065,7 @@ async def _run(
         try:
             stem = Path(path).stem
             for name in Path(".").glob(f"{stem}*.srt"):
-                srt_dest = Path(get_download_dir()) / name.name
+                srt_dest = Path(dest).parent / name.name
                 if not srt_dest.exists():
                     import shutil
                     shutil.copy2(name, srt_dest)
