@@ -86,6 +86,8 @@ export type AppState = {
   history: HistoryItem[]
   queue: QueueItem[]
   files?: { name: string; path: string }[]
+  last_error?: string
+  port?: number
   pc?: { user?: string; host?: string }
 }
 

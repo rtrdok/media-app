@@ -10,6 +10,7 @@ import { useCallback, useDeferredValue, useEffect, useEffectEvent, useMemo, useS
 import { InlineVideoPlayer } from "@/components/media/InlineVideoPlayer"
 import { ShazamResultCard } from "@/components/shazam/ShazamResultCard"
 import { HistoryThumb } from "@/components/history/HistoryThumb"
+import { VirtualList } from "@/components/VirtualList"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -27,7 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { useApp } from "@/context/AppProvider"
+import { useAppActions, useAppData, useLiveState } from "@/context/AppProvider"
 import { PlaylistQueueModal, isPlaylistUrl } from "@/components/PlaylistQueueModal"
 import {
   cancelJob,
@@ -92,8 +93,17 @@ function historyMeta(it: HistoryItem): string {
   return [plat, kind, mid, dur].filter(Boolean).join(" · ")
 }
 
+function HomeShazamSlot({ onDownloaded }: { onDownloaded: () => void }) {
+  const live = useLiveState()
+  const shazam = live?.last?.shazam
+  if (!shazam?.track) return null
+  return <ShazamResultCard result={shazam} onDownloaded={onDownloaded} />
+}
+
 export function HomePage() {
-  const { state, refresh, historySearchRef, playWithQueue } = useApp()
+  const { refresh, refreshHistory, historySearchRef, playWithQueue } = useAppActions()
+  const data = useAppData()
+  const historyAll = data?.history ?? []
   const [url, setUrl] = useState("")
   const [platform, setPlatform] = useState("youtube")
   const [quality, setQuality] = useState("1080")
@@ -113,8 +123,6 @@ export function HomePage() {
   const [clipPos, setClipPos] = useState(0)
   const [playlistOpen, setPlaylistOpen] = useState(false)
   const [playlistUrl, setPlaylistUrl] = useState("")
-
-  const shazam = state?.last?.shazam
 
   const runPreview = useCallback(async (raw: string) => {
     const u = firstUrl(raw)
@@ -191,7 +199,7 @@ export function HomePage() {
 
   const deferredHistQ = useDeferredValue(histQ)
   const history = useMemo(() => {
-    let list = state?.history ?? []
+    let list = historyAll
     if (platform) {
       list = list.filter((h) => (h.platform || "").toLowerCase() === platform.toLowerCase())
     }
@@ -200,13 +208,13 @@ export function HomePage() {
       const q = deferredHistQ.toLowerCase()
       list = list.filter(
         (h) =>
-          h.title.toLowerCase().includes(q) ||
-          h.url.toLowerCase().includes(q) ||
+          (h.title || "").toLowerCase().includes(q) ||
+          (h.url || "").toLowerCase().includes(q) ||
           (h.platform_name || "").toLowerCase().includes(q),
       )
     }
     return list
-  }, [state?.history, platform, favOnly, deferredHistQ])
+  }, [historyAll, platform, favOnly, deferredHistQ])
   const deferredHistory = useDeferredValue(history)
 
   async function download() {
@@ -222,7 +230,7 @@ export function HomePage() {
     }
 
     // уже скачано?
-    const hist = state?.history ?? []
+    const hist = historyAll
     const dup = hist.find((h) => {
       if (!h.url || !u) return false
       const same =
@@ -246,6 +254,7 @@ export function HomePage() {
       end: clip ? clipEnd : "",
     })
     void refresh()
+    void refreshHistory()
   }
 
   async function recognizeMusic() {
@@ -261,8 +270,7 @@ export function HomePage() {
     })
     for (let i = 0; i < 120; i++) {
       await new Promise((r) => setTimeout(r, 400))
-      const s = await fetchState()
-      void refresh()
+      const s = await fetchState(false, true)
       if (s.last?.shazam?.track || s.last?.error) break
       if (!s.busy && i > 2) break
     }
@@ -277,12 +285,12 @@ export function HomePage() {
 
   async function toggleFav(it: HistoryItem) {
     await patchHistory(it.id, { favorite: !it.favorite })
-    void refresh()
+    void refreshHistory()
   }
 
   function playItem(it: HistoryItem) {
     if (!it.dest) return
-    const playable = (state?.history ?? []).filter((h) => h.dest)
+    const playable = historyAll.filter((h) => h.dest)
     const tracks = playable.map((h) => playerTrackFromHistory(h))
     const idx = playable.findIndex((h) => h.id === it.id)
     playWithQueue(tracks, idx >= 0 ? idx : 0)
@@ -387,7 +395,7 @@ export function HomePage() {
         <span className="text-muted-foreground text-xs">Shazam по ссылке; для отрывка включите «Клип» и укажите время</span>
       </div>
 
-      {shazam?.track ? <ShazamResultCard result={shazam} onDownloaded={() => void refresh()} /> : null}
+      <HomeShazamSlot onDownloaded={() => void refreshHistory()} />
 
       <div className="mb-8 flex flex-wrap items-center gap-2">
         {PLATFORM_PILLS.map((p) => (
@@ -492,18 +500,19 @@ export function HomePage() {
       </div>
 
       <Card className="border-border bg-card overflow-hidden rounded-2xl border pt-0 pr-0 pb-0 pl-0 shadow-sm">
-        {deferredHistory.length === 0 ? (
-          <p className="text-muted-foreground py-16 text-center text-sm">
-            {favOnly || histQ.trim()
-              ? "Ничего не найдено"
-              : `Нет загрузок для ${PLATFORM_PILLS.find((p) => p.id === platform)?.label || platform}`}
-          </p>
-        ) : (
-          deferredHistory.map((it, i) => (
-            <div
-              key={it.id}
-              className="border-border flex items-center gap-4 border-b pt-4 pr-5 pb-4 pl-5 last:border-b-0"
-            >
+        <VirtualList
+          items={deferredHistory}
+          rowHeight={76}
+          maxHeight={Math.min(640, typeof window !== "undefined" ? Math.round(window.innerHeight * 0.62) : 560)}
+          empty={
+            <p className="text-muted-foreground py-16 text-center text-sm">
+              {favOnly || histQ.trim()
+                ? "Ничего не найдено"
+                : `Нет загрузок для ${PLATFORM_PILLS.find((p) => p.id === platform)?.label || platform}`}
+            </p>
+          }
+          renderRow={(it, i) => (
+            <div className="border-border flex h-full items-center gap-4 border-b pt-3 pr-5 pb-3 pl-5">
               <HistoryThumb index={i} thumb={it.thumb} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{it.title}</p>
@@ -536,7 +545,7 @@ export function HomePage() {
                   <DropdownMenuItem
                     className="text-destructive"
                     onClick={() => {
-                      void deleteHistory(it.id).then(() => refresh())
+                      void deleteHistory(it.id).then(() => refreshHistory())
                     }}
                   >
                     Удалить из истории
@@ -544,8 +553,8 @@ export function HomePage() {
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-          ))
-        )}
+          )}
+        />
       </Card>
 
       <PlaylistQueueModal
@@ -555,7 +564,10 @@ export function HomePage() {
         quality={quality}
         fmt={fmt}
         onClose={() => setPlaylistOpen(false)}
-        onQueued={() => void refresh()}
+        onQueued={() => {
+          void refresh()
+          void refreshHistory()
+        }}
       />
     </div>
   )

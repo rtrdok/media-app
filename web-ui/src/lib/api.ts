@@ -6,8 +6,21 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>
 }
 
-export function fetchState(files = false): Promise<AppState> {
-  return json(`/api/state${files ? "?files=1" : ""}`)
+export function fetchState(files = false, light = false): Promise<AppState> {
+  const q = new URLSearchParams()
+  if (files) q.set("files", "1")
+  if (light) q.set("light", "1")
+  const qs = q.toString()
+  return json(`/api/state${qs ? `?${qs}` : ""}`)
+}
+
+export function fetchHistory(params?: { q?: string; favorite?: boolean }) {
+  const q = new URLSearchParams()
+  if (params?.q) q.set("q", params.q)
+  if (params?.favorite === true) q.set("favorite", "1")
+  if (params?.favorite === false) q.set("favorite", "0")
+  const qs = q.toString()
+  return json<{ ok: boolean; history: HistoryItem[] }>(`/api/history${qs ? `?${qs}` : ""}`)
 }
 
 export function postJob(body: Record<string, unknown>) {

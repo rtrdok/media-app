@@ -521,21 +521,22 @@ async def index():
 
 
 @app.get("/api/state")
-async def state(files: int = 0):
+async def state(files: int = 0, light: int = 0):
+    """Состояние приложения.
+
+    light=1 — лёгкий heartbeat (очередь/прогресс), без history/settings.
+    Полный ответ — при старте UI и когда нужна история/настройки.
+    """
     _sync_busy_and_progress()
-    return {
+    payload: dict = {
         "busy": _busy,
         "paused": _paused,
         "progress": dict(_progress),
         "running_count": len(_running_items()),
         "max_concurrent": _max_concurrent(),
         "last": dict(_last),
-        "download_dir": get_download_dir(),
-        "settings": get_all(),
         "version": APP_VERSION,
         "port": get_listen_port(),
-        "history": _history_payload(),
-        "files": _list_files() if files else [],
         "queue": [
             {
                 "id": q["id"],
@@ -549,11 +550,25 @@ async def state(files: int = 0):
             for q in _queue
         ],
         "last_error": (_last.get("error") or ""),
-        "pc": {
-            "user": os.environ.get("USERNAME") or os.environ.get("USER") or "",
-            "host": os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "",
-        },
     }
+    if light:
+        if files:
+            payload["files"] = _list_files()
+        return payload
+
+    payload.update(
+        {
+            "download_dir": get_download_dir(),
+            "settings": get_all(),
+            "history": _history_payload(),
+            "files": _list_files() if files else [],
+            "pc": {
+                "user": os.environ.get("USERNAME") or os.environ.get("USER") or "",
+                "host": os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "",
+            },
+        }
+    )
+    return payload
 
 
 def _list_files() -> list[dict]:
