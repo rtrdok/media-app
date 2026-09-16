@@ -30,14 +30,17 @@ export function PlaylistQueueModal({ open, url, kind, quality, fmt, onClose, onQ
     setSelected(new Set())
     void playlistUrls(url)
       .then((j) => {
-        if (!j.ok) {
-          setErr("Не удалось прочитать плейлист")
+        if (!j.ok && !(j.entries && j.entries.length)) {
+          setErr(j.error || "Не удалось прочитать плейлист")
           return
         }
         setTitle(j.title || "Плейлист")
         const list = j.entries || []
         setEntries(list)
         setSelected(new Set(list.map((e) => e.url)))
+        if (!list.length) {
+          setErr(j.error || "В плейлисте 0 роликов — проверьте ссылку (нужен list=PL…) или cookies")
+        }
       })
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))

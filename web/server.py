@@ -1369,32 +1369,22 @@ async def integration(body: IntegrationIn):
 @app.post("/api/playlist")
 async def playlist_info(body: PlaylistIn):
     url = body.url.strip()
-    from media_core.download_ytdlp import ytdlp_safe_opts, _ytdlp_extract_sync
-
-    def _list():
-        opts = ytdlp_safe_opts(skip_download=True, extract_flat="in_playlist", noplaylist=False, playlistend=100)
-        # allow playlist
-        opts.pop("noplaylist", None)
-        opts["noplaylist"] = False
-        info, _ = _ytdlp_extract_sync(url, opts, False)
-        return info or {}
+    from media_core.download_ytdlp import extract_playlist_entries
 
     try:
-        info = await asyncio.wait_for(asyncio.to_thread(_list), timeout=40)
+        data = await asyncio.wait_for(
+            asyncio.to_thread(extract_playlist_entries, url, limit=500),
+            timeout=90,
+        )
     except Exception as e:
         raise HTTPException(400, f"Не удалось прочитать плейлист: {e}")
-    entries = []
-    for e in info.get("entries") or []:
-        if not e:
-            continue
-        vid = e.get("id") or e.get("url")
-        title = e.get("title") or vid
-        link = e.get("url") or e.get("webpage_url")
-        if vid and not link:
-            link = f"https://www.youtube.com/watch?v={vid}"
-        if link:
-            entries.append({"id": vid, "title": title, "url": clean_media_url(link), "duration": e.get("duration")})
-    return {"ok": True, "title": info.get("title") or "Плейлист", "entries": entries}
+    return {
+        "ok": bool(data.get("ok")),
+        "title": data.get("title") or "Плейлист",
+        "entries": data.get("entries") or [],
+        "count": data.get("count") or 0,
+        "error": data.get("error") or "",
+    }
 
 
 @app.post("/api/ytdlp/update")

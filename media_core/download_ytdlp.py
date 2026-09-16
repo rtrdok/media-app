@@ -100,6 +100,106 @@ def ytdlp_safe_opts(**extra) -> dict:
     return opts
 
 
+def youtube_playlist_url(url: str) -> str:
+    """watch?v=…&list=PL… → https://www.youtube.com/playlist?list=PL…"""
+    from urllib.parse import parse_qs, urlparse
+
+    raw = (url or "").strip()
+    if not raw:
+        return raw
+    try:
+        p = urlparse(raw)
+        host = (p.netloc or "").lower()
+        if "youtube" not in host and "youtu.be" not in host:
+            return raw
+        qs = parse_qs(p.query)
+        list_id = (qs.get("list") or [""])[0].strip()
+        if not list_id or list_id.startswith(("RD", "UL", "LL")):
+            return raw
+        if "/playlist" in (p.path or ""):
+            return f"https://www.youtube.com/playlist?list={list_id}"
+        return f"https://www.youtube.com/playlist?list={list_id}"
+    except Exception:
+        return raw
+
+
+def extract_playlist_entries(url: str, *, limit: int = 500) -> dict:
+    """Список роликов плейлиста (flat). Не использует probe одного видео."""
+    import re
+
+    from media_core.utils import clean_media_url
+
+    list_url = youtube_playlist_url(url)
+    opts = ytdlp_safe_opts(
+        skip_download=True,
+        extract_flat=True,
+        noplaylist=False,
+        ignoreerrors=True,
+        playlistend=max(1, int(limit)),
+    )
+    opts["noplaylist"] = False
+    opts.pop("playlistend", None)
+    opts["playlistend"] = max(1, int(limit))
+    _apply_ytdlp_cookies(opts, list_url)
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(list_url, download=False) or {}
+
+    raw_entries = info.get("entries")
+    if raw_entries is None and info.get("_type") != "playlist":
+        # иногда приходит одно видео — пробуем явно playlist URL
+        if list_url != url.strip():
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(list_url, download=False) or {}
+            raw_entries = info.get("entries")
+
+    entries: list[dict] = []
+    for e in raw_entries or []:
+        if not e:
+            continue
+        vid = str(e.get("id") or "").strip()
+        title = (e.get("title") or vid or "Без названия").strip()
+        link = (e.get("url") or e.get("webpage_url") or e.get("original_url") or "").strip()
+        if link and not link.startswith("http"):
+            # extract_flat: url часто = id
+            if re.fullmatch(r"[\w-]{6,}", link):
+                vid = vid or link
+                link = f"https://www.youtube.com/watch?v={link}"
+            else:
+                link = ""
+        if not link and vid:
+            ie = (e.get("ie_key") or e.get("extractor_key") or "").lower()
+            if "soundcloud" in ie:
+                link = f"https://soundcloud.com/{vid}"
+            elif "vk" in ie:
+                link = vid if vid.startswith("http") else ""
+            else:
+                link = f"https://www.youtube.com/watch?v={vid}"
+        if not link.startswith("http"):
+            continue
+        link = clean_media_url(link)
+        if not link:
+            continue
+        entries.append(
+            {
+                "id": vid or link,
+                "title": title,
+                "url": link,
+                "duration": e.get("duration"),
+            }
+        )
+
+    title = (info.get("title") or "").strip() or "Плейлист"
+    return {
+        "ok": bool(entries),
+        "title": title,
+        "entries": entries,
+        "count": len(entries),
+        "url": list_url,
+        "error": "" if entries else "В плейлисте нет доступных роликов (или не удалось прочитать список)",
+    }
+
+
 def _is_bot_check_error(err: Exception) -> bool:
     msg = str(err).lower()
     return (

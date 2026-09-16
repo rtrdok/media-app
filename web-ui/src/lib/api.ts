@@ -377,6 +377,7 @@ export function playlistUrls(url: string) {
     ok: boolean
     title?: string
     entries?: { id?: string; title: string; url: string; duration?: number }[]
+    count?: number
     error?: string
   }>("/api/playlist", {
     method: "POST",
