@@ -5,15 +5,44 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Callable
+
+from media_core.config import BASE_DIR
 
 HOST = "127.0.0.1"
 WAKE_PORTS = (17865, 8765, 18765)
 MUTEX_NAME = "Local\\MediaAppSingleInstance"
+_PORT_FILE = BASE_DIR / "config" / "listen_port.txt"
+# Mutex API недоступен (не Windows / сбой) — не блокируем запуск, но и не притворяемся владельцем
+MUTEX_UNAVAILABLE = object()
+
+
+def write_listen_port(port: int) -> None:
+    try:
+        _PORT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _PORT_FILE.write_text(str(int(port)), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def read_listen_port() -> int | None:
+    try:
+        if not _PORT_FILE.is_file():
+            return None
+        return int(_PORT_FILE.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
 
 
 def try_acquire_mutex() -> object | None:
-    """Windows named mutex. None = уже запущено (или не Windows)."""
+    """Windows named mutex.
+
+    Returns:
+      handle — мы владельцы
+      None — уже запущено (ERROR_ALREADY_EXISTS)
+      MUTEX_UNAVAILABLE — API недоступен (не блокировать старт)
+    """
     try:
         import ctypes
         from ctypes import wintypes
@@ -23,7 +52,7 @@ def try_acquire_mutex() -> object | None:
         kernel32.CreateMutexW.restype = wintypes.HANDLE
         handle = kernel32.CreateMutexW(None, False, MUTEX_NAME)
         if not handle:
-            return None
+            return MUTEX_UNAVAILABLE
         err = kernel32.GetLastError()
         # ERROR_ALREADY_EXISTS = 183
         if err == 183:
@@ -31,7 +60,18 @@ def try_acquire_mutex() -> object | None:
             return None
         return handle
     except Exception:
-        return object()  # не Windows / ошибка — не блокируем запуск
+        return MUTEX_UNAVAILABLE
+
+
+def release_mutex(handle: object | None) -> None:
+    if handle is None or handle is MUTEX_UNAVAILABLE:
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.kernel32.CloseHandle(handle)
+    except Exception:
+        pass
 
 
 def _post_show(port: int) -> bool:
@@ -53,9 +93,17 @@ def _ping(port: int) -> bool:
         return data.get("app") == "MediaApp"
 
 
-def wake_existing_instance(ports: tuple[int, ...] = WAKE_PORTS) -> bool:
+def wake_existing_instance(ports: tuple[int, ...] | None = None) -> bool:
     """Показать уже запущенное окно. True если ответил наш сервер."""
-    for port in ports:
+    ordered: list[int] = []
+    saved = read_listen_port()
+    if saved:
+        ordered.append(saved)
+    for p in ports or WAKE_PORTS:
+        if p not in ordered:
+            ordered.append(p)
+
+    for port in ordered:
         try:
             if _post_show(port):
                 return True
@@ -64,11 +112,9 @@ def wake_existing_instance(ports: tuple[int, ...] = WAKE_PORTS) -> bool:
         except Exception:
             continue
 
-    # сервер жив, но show не ок — всё равно «занято», иначе два UI
-    for port in ports:
+    for port in ordered:
         try:
             if _ping(port):
-                # ещё раз попросим show (восстановление после мини/трея)
                 try:
                     _post_show(port)
                 except Exception:

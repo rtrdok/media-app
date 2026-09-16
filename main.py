@@ -29,11 +29,15 @@ if sys.stderr is None or not hasattr(sys.stderr, "isatty"):
 
 from media_core.database import init_db
 from media_core.logging_setup import log
+from media_core.process_cleanup import arm_hard_exit, terminate_child_processes
 from media_core.settings_store import get_bool, get_download_dir
 from media_core.single_instance import (
+    MUTEX_UNAVAILABLE,
+    release_mutex,
     set_show_callback,
     try_acquire_mutex,
     wake_existing_instance,
+    write_listen_port,
 )
 from media_core.utils import cleanup_temp_files
 from web.server import (
@@ -42,7 +46,9 @@ from web.server import (
     set_listen_port,
     set_mini_player_callback,
     set_on_top_callback,
+    set_quit_callback,
     set_show_window_callback,
+    set_uvicorn_server,
 )
 
 HOST = "127.0.0.1"
@@ -54,6 +60,10 @@ _tray = None
 _exit_requested = False
 _mutex_handle = None
 _mini_apply: dict = {"fn": None}
+_mini_win_ref: dict = {"win": None}
+_shutdown_lock = threading.Lock()
+_shutdown_started = False
+_uvicorn_server_ref: dict = {"server": None}
 
 
 def _port_free(port: int) -> bool:
@@ -87,7 +97,10 @@ def _serve(port: int) -> None:
             access_log=False,
             loop="asyncio",
         )
-        uvicorn.Server(config).run()
+        server = uvicorn.Server(config)
+        _uvicorn_server_ref["server"] = server
+        set_uvicorn_server(server)
+        server.run()
     except Exception:
         _serve_error = traceback.format_exc()
         log.exception("HTTP-сервер не запустился")
@@ -131,7 +144,6 @@ def _make_tray_icon():
                     return Image.open(path).convert("RGBA")
                 except Exception:
                     pass
-    # fallback: синий круг без тёмного фона
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     from PIL import ImageDraw
 
@@ -185,6 +197,120 @@ def _show_window() -> None:
             pass
 
 
+def _stop_tray() -> None:
+    global _tray
+    try:
+        if _tray is not None:
+            _tray.stop()
+    except Exception:
+        pass
+    _tray = None
+
+
+def _destroy_mini() -> None:
+    from media_core.player_bridge import set_mini_open
+
+    set_mini_open(False)
+    mw = _mini_win_ref.get("win")
+    _mini_win_ref["win"] = None
+    if mw is None:
+        return
+    try:
+        mw.destroy()
+        log.info("shutdown: mini destroyed")
+    except Exception as e:
+        log.warning("shutdown: mini destroy failed: %s", e)
+
+
+def _shutdown_app(*, from_gui: bool = False) -> None:
+    """Полный выход: mini → main → queue/uvicorn → дети → hard exit."""
+    global _exit_requested, _shutdown_started, _mutex_handle, _window
+
+    with _shutdown_lock:
+        if _shutdown_started:
+            return
+        _shutdown_started = True
+        _exit_requested = True
+
+    log.info("shutdown: begin (from_gui=%s)", from_gui)
+    _stop_tray()
+
+    try:
+        from web.server import request_app_shutdown
+
+        request_app_shutdown()
+    except Exception:
+        log.exception("shutdown: request_app_shutdown")
+
+    _destroy_mini()
+
+    win = _window
+    if win is not None:
+        try:
+            win.destroy()
+            log.info("shutdown: main destroyed")
+        except Exception as e:
+            log.warning("shutdown: main destroy failed: %s", e)
+        _window = None
+
+    try:
+        cleanup_temp_files()
+    except Exception:
+        pass
+
+    try:
+        terminate_child_processes()
+    except Exception:
+        pass
+
+    try:
+        release_mutex(_mutex_handle)
+    except Exception:
+        pass
+    _mutex_handle = None
+
+    arm_hard_exit(2.5)
+    log.info("shutdown: hard exit armed")
+
+
+def _request_quit_from_tray() -> None:
+    """Трей работает не в GUI-потоке — просим выход через JS API / HTTP."""
+    global _exit_requested
+    _exit_requested = True
+    _stop_tray()
+
+    def _emergency() -> None:
+        if not _shutdown_started:
+            log.warning("shutdown: emergency fallback from tray")
+            _shutdown_app(from_gui=False)
+
+    threading.Timer(5.0, _emergency).start()
+
+    win = _window
+    if win is not None:
+        try:
+            win.evaluate_js(
+                "window.pywebview && window.pywebview.api && window.pywebview.api.quit_app()"
+            )
+            return
+        except Exception as e:
+            log.warning("shutdown: evaluate_js quit failed: %s", e)
+
+    try:
+        req = urllib.request.Request(
+            f"http://{HOST}:{PORT}/api/window/quit",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=2.0)
+        return
+    except Exception as e:
+        log.warning("shutdown: HTTP quit failed: %s", e)
+
+    _shutdown_app(from_gui=False)
+
+
 def _start_tray(window) -> None:
     global _tray
     try:
@@ -198,17 +324,7 @@ def _start_tray(window) -> None:
         _show_window()
 
     def quit_app(icon=None, item=None):
-        global _exit_requested
-        _exit_requested = True
-        try:
-            if _tray:
-                _tray.stop()
-        except Exception:
-            pass
-        try:
-            window.destroy()
-        except Exception:
-            pass
+        _request_quit_from_tray()
 
     menu = pystray.Menu(
         Item("Показать", show, default=True),
@@ -222,14 +338,15 @@ def _ensure_single_instance() -> bool:
     """True = можно продолжать запуск. False = уже есть экземпляр (разбудили его)."""
     global _mutex_handle
     _mutex_handle = try_acquire_mutex()
-    if _mutex_handle is not None:
-        # mutex наш — но порт может быть занят зомби-сервером
+    if _mutex_handle is MUTEX_UNAVAILABLE:
+        log.warning("Mutex недоступен — single-instance отключён")
+        _mutex_handle = None
         return True
-    # mutex занят → будим существующее окно
+    if _mutex_handle is not None:
+        return True
     if wake_existing_instance((PREFERRED_PORT, 8765, 18765)):
         log.info("Уже запущено — показываю существующее окно")
         return False
-    # mutex есть, но HTTP не ответил — не стартуем второй UI
     log.warning("Другой экземпляр держит mutex, но не ответил на show")
     return False
 
@@ -245,16 +362,16 @@ def main() -> None:
         Path(get_download_dir()).mkdir(parents=True, exist_ok=True)
         cleanup_temp_files()
 
-        # если preferred занят чужим процессом — свободный порт (mutex уже наш)
         PORT = _pick_port()
         set_listen_port(PORT)
+        write_listen_port(PORT)
         set_show_window_callback(_show_window)
         set_show_callback(_show_window)
+        set_quit_callback(lambda: _shutdown_app(from_gui=False))
 
         _fs_active = {"on": False}
 
         def _set_fullscreen(enable: bool | None = None):
-            # Window.fullscreen в pywebview не обновляется после toggle — ведём свой флаг
             win = _window
             if win is None:
                 return
@@ -280,14 +397,11 @@ def main() -> None:
 
         set_on_top_callback(_set_on_top)
 
-        _mini_win: dict = {"win": None}
-
         def _apply_mini_player(enable: bool) -> bool:
-            """Отдельное frameless-окно + скрытие главного (без сжатия UI)."""
             from media_core.player_bridge import set_mini_open
 
             main = _window
-            mini = _mini_win.get("win")
+            mini = _mini_win_ref.get("win")
             if main is None or mini is None:
                 set_mini_open(False)
                 return False
@@ -306,7 +420,6 @@ def main() -> None:
                     mini.resize(620, 68)
                     mini.on_top = True
                     mini.show()
-                    # главное скрываем — аудио продолжает играть в скрытом WebView
                     try:
                         main.hide()
                     except Exception:
@@ -322,7 +435,6 @@ def main() -> None:
                     except Exception:
                         pass
                     try:
-                        # на всякий случай вернуть нормальный размер
                         h = int(getattr(main, "height", 0) or 0)
                         w = int(getattr(main, "width", 0) or 0)
                         if h < 400 or w < 900:
@@ -351,6 +463,11 @@ def main() -> None:
 
             def hide_mini(self):
                 return {"ok": _apply_mini_player(False)}
+
+            def quit_app(self):
+                """Вызывается с GUI-потока (из трея через evaluate_js)."""
+                _shutdown_app(from_gui=True)
+                return {"ok": True}
 
         def _set_mini_player(enable: bool):
             from media_core.player_bridge import set_mini_want
@@ -394,7 +511,7 @@ def main() -> None:
             hidden=True,
             js_api=gui_api,
         )
-        _mini_win["win"] = mini
+        _mini_win_ref["win"] = mini
 
         def on_mini_closing():
             from media_core.player_bridge import push_command, set_mini_open
@@ -421,7 +538,8 @@ def main() -> None:
             pass
 
         def on_closing():
-            if _exit_requested:
+            global _exit_requested
+            if _exit_requested or _shutdown_started:
                 return True
             if get_bool("minimize_to_tray", True) and _tray is not None:
                 try:
@@ -429,6 +547,8 @@ def main() -> None:
                 except Exception:
                     pass
                 return False
+            # крестик без трея — полный выход
+            _exit_requested = True
             return True
 
         try:
@@ -437,26 +557,8 @@ def main() -> None:
             pass
 
         def on_closed():
-            try:
-                mw = _mini_win.get("win")
-                _mini_win["win"] = None
-                if mw is not None:
-                    try:
-                        mw.destroy()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            try:
-                from web.server import request_app_shutdown
-
-                request_app_shutdown()
-            except Exception:
-                pass
-            try:
-                cleanup_temp_files()
-            except Exception:
-                pass
+            if not _shutdown_started:
+                _shutdown_app(from_gui=True)
 
         try:
             window.events.closed += on_closed
@@ -471,6 +573,12 @@ def main() -> None:
         if icon:
             start_kwargs["icon"] = icon
         webview.start(**start_kwargs)
+
+        # webview.start вернулся — добить процесс, если ещё жив
+        if not _shutdown_started:
+            _shutdown_app(from_gui=True)
+        else:
+            arm_hard_exit(1.0)
     except Exception:
         log.exception("Media App crashed")
         try:

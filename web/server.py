@@ -59,6 +59,8 @@ _show_window_cb = None
 _fullscreen_cb = None
 _on_top_cb = None
 _mini_player_cb = None
+_quit_cb = None
+_uvicorn_server = None
 
 
 def set_listen_port(port: int) -> None:
@@ -88,6 +90,30 @@ def set_on_top_callback(cb) -> None:
 def set_mini_player_callback(cb) -> None:
     global _mini_player_cb
     _mini_player_cb = cb
+
+
+def set_quit_callback(cb) -> None:
+    global _quit_cb
+    _quit_cb = cb
+
+
+def set_uvicorn_server(server) -> None:
+    global _uvicorn_server
+    _uvicorn_server = server
+
+
+def stop_uvicorn_server() -> None:
+    srv = _uvicorn_server
+    if srv is None:
+        return
+    try:
+        srv.should_exit = True
+    except Exception:
+        pass
+    try:
+        srv.force_exit = True
+    except Exception:
+        pass
 
 
 def _fmt_height(h: int) -> str:
@@ -172,11 +198,12 @@ _progress: dict = {
 
 
 def request_app_shutdown() -> None:
-    """Остановить очередь загрузок (из lifespan или при закрытии окна)."""
+    """Остановить очередь загрузок и HTTP-сервер (при закрытии окна)."""
     global _shutting_down, _paused
     _shutting_down = True
     _paused = True
     _cancel.set()
+    stop_uvicorn_server()
 
 
 def _schedule_pump() -> None:
@@ -1062,6 +1089,22 @@ async def window_show():
         except Exception:
             ok = False
     return {"ok": ok, "app": "MediaApp"}
+
+
+@app.post("/api/window/quit")
+async def window_quit():
+    """Запрос полного выхода (трей → GUI)."""
+    ok = False
+    if _quit_cb is not None:
+        try:
+            _quit_cb()
+            ok = True
+        except Exception:
+            ok = False
+    else:
+        request_app_shutdown()
+        ok = True
+    return {"ok": ok}
 
 
 class FullscreenIn(BaseModel):
