@@ -107,7 +107,9 @@ def _cover_url(track) -> str | None:
             cover_uri = getattr(albums[0], "cover_uri", None) or getattr(albums[0], "og_image", None)
     if not cover_uri or not isinstance(cover_uri, str):
         return None
-    u = cover_uri.replace("%%", "400x400")
+    u = cover_uri.replace("%%", "1000x1000")
+    if "%%" not in cover_uri and "/400x400" in u:
+        u = u.replace("/400x400", "/1000x1000")
     if u.startswith("http"):
         return u
     return f"https://{u}"

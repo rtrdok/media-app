@@ -194,14 +194,14 @@ def _connect_local(cid: str):
 def _push_local(rpc, state: dict[str, Any], cid: str) -> None:
     from pypresence.types import ActivityType, StatusDisplayType
 
-    from media_core.discord_presence import discord_cover_image
+    from media_core.discord_presence import resolve_discord_large_image
 
     has_track = bool(state.get("has_track"))
     playing = bool(state.get("playing"))
     title = _clip(str(state.get("title") or "Трек"))
     artist = _clip(str(state.get("artist") or ""))
     kind = str(state.get("kind") or "audio").lower()
-    cover = discord_cover_image(str(state.get("thumb") or ""))
+    cover = resolve_discord_large_image(str(state.get("thumb") or ""))
     try:
         current = float(state.get("current") or 0)
     except (TypeError, ValueError):
@@ -238,13 +238,10 @@ def _push_local(rpc, state: dict[str, Any], cid: str) -> None:
         kwargs["end"] = end_ts
     if cover:
         kwargs["large_image"] = cover
-    else:
-        # опциональный ассет из Developer Portal → Rich Presence → Art Assets
-        kwargs["large_image"] = "logo"
     try:
         rpc.update(**kwargs)
     except Exception:
-        if cover or kwargs.get("large_image") == "logo":
+        if cover:
             kwargs.pop("large_image", None)
             rpc.update(**kwargs)
         else:

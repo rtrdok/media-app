@@ -104,7 +104,7 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
             return {"ok": True, "skipped": True}
 
         try:
-            from media_core.discord_presence import discord_cover_image
+            from media_core.discord_presence import resolve_discord_large_image
             from pypresence.types import ActivityType, StatusDisplayType
 
             _ensure(cid)
@@ -115,7 +115,7 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
             if playing and duration > 1 and current < duration and start_ts is not None:
                 end_ts = int(start_ts + duration)
             is_video = kind == "video"
-            cover = discord_cover_image(thumb)
+            cover = resolve_discord_large_image(thumb)
             kwargs: dict[str, Any] = {
                 "activity_type": ActivityType.WATCHING if is_video else ActivityType.LISTENING,
                 "status_display_type": StatusDisplayType.DETAILS,
@@ -130,13 +130,14 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
                 kwargs["end"] = end_ts
             if cover:
                 kwargs["large_image"] = cover
-            else:
-                kwargs["large_image"] = "logo"
             try:
                 _rpc.update(**kwargs)
             except Exception:
-                kwargs.pop("large_image", None)
-                _rpc.update(**kwargs)
+                if cover:
+                    kwargs.pop("large_image", None)
+                    _rpc.update(**kwargs)
+                else:
+                    raise
             _last_sig = sig
             _last_push = now
             return {"ok": True}
