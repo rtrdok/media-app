@@ -21,6 +21,7 @@ from media_core.logging_setup import log
 _CACHE_DIR = BASE_DIR / "file_cache" / "discord_covers"
 _META_PATH = _CACHE_DIR / "cache.json"
 _META_TTL = 6 * 3600  # 6 часов — litterbox temporary
+_FAILED_RETRY_SECONDS = 10 * 60
 _meta_lock_note = False
 
 
@@ -134,6 +135,18 @@ def _cache_set(src: str, url: str) -> None:
     _save_meta(meta)
 
 
+def _recent_upload_failure(src: str) -> bool:
+    """Avoid blocking every player heartbeat while an image host is down."""
+    row = _load_meta().get(src)
+    return isinstance(row, dict) and bool(row.get("failed")) and float(row.get("exp") or 0) > time.time()
+
+
+def _cache_failure(src: str) -> None:
+    meta = _load_meta()
+    meta[src] = {"failed": True, "exp": time.time() + _FAILED_RETRY_SECONDS}
+    _save_meta(meta)
+
+
 def _download_bytes(url: str) -> tuple[bytes, str] | None:
     try:
         with httpx.Client(timeout=20, follow_redirects=True, trust_env=False) as client:
@@ -169,7 +182,7 @@ def _download_bytes(url: str) -> tuple[bytes, str] | None:
 def _upload_litterbox(data: bytes, ext: str) -> str | None:
     """Временный хост без API-ключа (файл живёт ~12ч на стороне сервиса)."""
     try:
-        with httpx.Client(timeout=40, follow_redirects=True, trust_env=False) as client:
+        with httpx.Client(timeout=8, follow_redirects=True, trust_env=False) as client:
             r = client.post(
                 "https://litterbox.catbox.moe/resources/internals/api.php",
                 data={"reqtype": "fileupload", "time": "12h"},
@@ -187,7 +200,7 @@ def _upload_litterbox(data: bytes, ext: str) -> str | None:
 
 def _upload_0x0(data: bytes, ext: str) -> str | None:
     try:
-        with httpx.Client(timeout=40, follow_redirects=True, trust_env=False) as client:
+        with httpx.Client(timeout=8, follow_redirects=True, trust_env=False) as client:
             r = client.post(
                 "https://0x0.st",
                 files={"file": (f"cover.{ext}", data, f"image/{ext}")},
@@ -201,6 +214,32 @@ def _upload_0x0(data: bytes, ext: str) -> str | None:
     return None
 
 
+def _upload_uguu(data: bytes, ext: str) -> str | None:
+    """Independent anonymous fallback for temporary Discord cover hosting."""
+    try:
+        with httpx.Client(timeout=10, follow_redirects=True, trust_env=False) as client:
+            r = client.post(
+                "https://uguu.se/upload.php",
+                files={"files[]": (f"cover.{ext}", data, f"image/{ext}")},
+            )
+            r.raise_for_status()
+            payload = r.json()
+            files = payload.get("files") if isinstance(payload, dict) else None
+            if isinstance(files, list) and files:
+                url = str((files[0] or {}).get("url") or "")
+                if url.startswith("https://"):
+                    return url
+    except Exception as e:
+        log.warning("uguu cover upload failed: %s", e)
+    return None
+
+
+def _rehost(data: bytes, ext: str) -> str | None:
+    # Uguu is tried first: Catbox and 0x0 are often blocked or overloaded
+    # together, and serial 40-second fallbacks used to freeze the RPC helper.
+    return _upload_uguu(data, ext) or _upload_0x0(data, ext) or _upload_litterbox(data, ext)
+
+
 def resolve_discord_large_image(thumb: str | None) -> str | None:
     """URL для large_image: прямой https или рехост, если Discord не любит CDN сервиса."""
     local = _local_cover(thumb)
@@ -212,11 +251,14 @@ def resolve_discord_large_image(thumb: str | None) -> str | None:
     cached = _cache_get(cache_key)
     if cached:
         return cached if len(cached) <= 256 else None
+    if _recent_upload_failure(cache_key):
+        return None
 
     if local:
         _key, data, ext = local
-        public = _upload_litterbox(data, ext) or _upload_0x0(data, ext)
+        public = _rehost(data, ext)
         if not public or len(public) > 256:
+            _cache_failure(cache_key)
             return None
         _cache_set(cache_key, public)
         log.info("discord local cover rehosted")
@@ -246,8 +288,9 @@ def resolve_discord_large_image(thumb: str | None) -> str | None:
         # fallback: всё же отдать исходник, если влезает
         return src if len(src) <= 256 else None
     data, ext = got
-    public = _upload_litterbox(data, ext) or _upload_0x0(data, ext)
+    public = _rehost(data, ext)
     if not public:
+        _cache_failure(cache_key)
         return src if len(src) <= 256 else None
     if len(public) > 256:
         return None

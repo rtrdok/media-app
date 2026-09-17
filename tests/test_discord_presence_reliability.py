@@ -21,7 +21,7 @@ class DiscordPresenceReliabilityTests(unittest.TestCase):
             with patch.object(presence, "BASE_DIR", root), \
                     patch.object(presence, "_CACHE_DIR", root / "cache"), \
                     patch.object(presence, "_META_PATH", root / "cache" / "meta.json"), \
-                    patch.object(presence, "_upload_litterbox", return_value="https://cdn.example/cover.jpg") as upload:
+                    patch.object(presence, "_rehost", return_value="https://cdn.example/cover.jpg") as upload:
                 self.assertEqual(presence.resolve_discord_large_image(thumb), "https://cdn.example/cover.jpg")
             upload.assert_called_once()
 
@@ -43,6 +43,13 @@ class DiscordPresenceReliabilityTests(unittest.TestCase):
             rpc.clear_presence()
         post.assert_called_once_with("/clear", {})
         enqueue.assert_called_once()
+
+    def test_rehost_uses_next_host_after_primary_failure(self):
+        with patch.object(presence, "_upload_uguu", return_value=None), \
+                patch.object(presence, "_upload_0x0", return_value="https://0x0.st/cover.jpg") as fallback, \
+                patch.object(presence, "_upload_litterbox"):
+            self.assertEqual(presence._rehost(b"image", "jpg"), "https://0x0.st/cover.jpg")
+        fallback.assert_called_once()
 
 
 if __name__ == "__main__":
