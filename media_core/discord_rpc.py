@@ -232,14 +232,6 @@ def _push_local(rpc, state: dict[str, Any], cid: str) -> None:
     if playing and duration > 1 and current < duration and start_ts is not None:
         end_ts = int(start_ts + duration)
     is_video = kind == "video"
-    # Discord merges a partial SET_ACTIVITY payload with the previous one.
-    # A pause has no timestamps, so clear the prior running activity first;
-    # otherwise its old countdown keeps ticking after pause/seek.
-    if not playing:
-        try:
-            rpc.clear()
-        except Exception:
-            pass
     kwargs: dict[str, Any] = {
         "activity_type": ActivityType.WATCHING if is_video else ActivityType.LISTENING,
         "status_display_type": StatusDisplayType.DETAILS,
@@ -254,19 +246,11 @@ def _push_local(rpc, state: dict[str, Any], cid: str) -> None:
     if cover:
         kwargs["large_image"] = cover
     try:
-        if playing:
-            rpc.update(**kwargs)
-        else:
-            from media_core.discord_payload import update_paused_activity
-            update_paused_activity(rpc, kwargs)
+        rpc.update(**kwargs)
     except Exception:
         if cover:
             kwargs.pop("large_image", None)
-            if playing:
-                rpc.update(**kwargs)
-            else:
-                from media_core.discord_payload import update_paused_activity
-                update_paused_activity(rpc, kwargs)
+            rpc.update(**kwargs)
         else:
             raise
 

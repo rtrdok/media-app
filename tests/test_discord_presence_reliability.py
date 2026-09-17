@@ -84,10 +84,10 @@ class DiscordPresenceReliabilityTests(unittest.TestCase):
             self.assertTrue(agent.apply_state(state)["ok"])
             state["current"] = 181
             self.assertTrue(agent.apply_state(state)["ok"])
-        self.assertEqual(fake.clears, 2)
+        self.assertEqual(fake.clears, 0)
         self.assertEqual(len(fake.updates), 2)
-        payload = fake.updates[-1]["payload_override"]
-        self.assertEqual(payload["args"]["activity"]["timestamps"], {})
+        self.assertNotIn("start", fake.updates[-1])
+        self.assertNotIn("end", fake.updates[-1])
 
 
 if __name__ == "__main__":

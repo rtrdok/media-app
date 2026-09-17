@@ -126,14 +126,6 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
                 end_ts = int(start_ts + duration)
             is_video = kind == "video"
             cover = resolve_discord_large_image(thumb)
-            # Discord retains old timestamps when an update simply omits them.
-            # Clear first on pause (and paused seeking), then publish a static
-            # activity with no start/end so it displays the selected position.
-            if not playing:
-                try:
-                    _rpc.clear()
-                except Exception:
-                    pass
             kwargs: dict[str, Any] = {
                 "activity_type": ActivityType.WATCHING if is_video else ActivityType.LISTENING,
                 "status_display_type": StatusDisplayType.DETAILS,
@@ -148,19 +140,11 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
             if cover:
                 kwargs["large_image"] = cover
             try:
-                if playing:
-                    _rpc.update(**kwargs)
-                else:
-                    from media_core.discord_payload import update_paused_activity
-                    update_paused_activity(_rpc, kwargs)
+                _rpc.update(**kwargs)
             except Exception:
                 if cover:
                     kwargs.pop("large_image", None)
-                    if playing:
-                        _rpc.update(**kwargs)
-                    else:
-                        from media_core.discord_payload import update_paused_activity
-                        update_paused_activity(_rpc, kwargs)
+                    _rpc.update(**kwargs)
                 else:
                     raise
             _last_sig = sig
