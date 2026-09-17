@@ -130,7 +130,7 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
                 "activity_type": ActivityType.WATCHING if is_video else ActivityType.LISTENING,
                 "status_display_type": StatusDisplayType.DETAILS,
                 "details": title,
-                "state": artist or ("видео" if is_video else "музыка"),
+                "state": (artist or ("видео" if is_video else "музыка")) if playing else f"⏸ {artist or ('видео' if is_video else 'музыка')}",
                 "name": "Media App",
             }
             if start_ts is not None:
@@ -140,11 +140,19 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
             if cover:
                 kwargs["large_image"] = cover
             try:
-                _rpc.update(**kwargs)
+                if playing:
+                    _rpc.update(**kwargs)
+                else:
+                    from media_core.discord_payload import update_paused_activity
+                    update_paused_activity(_rpc, kwargs)
             except Exception:
                 if cover:
                     kwargs.pop("large_image", None)
-                    _rpc.update(**kwargs)
+                    if playing:
+                        _rpc.update(**kwargs)
+                    else:
+                        from media_core.discord_payload import update_paused_activity
+                        update_paused_activity(_rpc, kwargs)
                 else:
                     raise
             _last_sig = sig

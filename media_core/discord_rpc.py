@@ -236,7 +236,7 @@ def _push_local(rpc, state: dict[str, Any], cid: str) -> None:
         "activity_type": ActivityType.WATCHING if is_video else ActivityType.LISTENING,
         "status_display_type": StatusDisplayType.DETAILS,
         "details": title,
-        "state": artist or ("видео" if is_video else "музыка"),
+        "state": (artist or ("видео" if is_video else "музыка")) if playing else f"⏸ {artist or ('видео' if is_video else 'музыка')}",
         "name": "Media App",
     }
     if start_ts is not None:
@@ -246,11 +246,19 @@ def _push_local(rpc, state: dict[str, Any], cid: str) -> None:
     if cover:
         kwargs["large_image"] = cover
     try:
-        rpc.update(**kwargs)
+        if playing:
+            rpc.update(**kwargs)
+        else:
+            from media_core.discord_payload import update_paused_activity
+            update_paused_activity(rpc, kwargs)
     except Exception:
         if cover:
             kwargs.pop("large_image", None)
-            rpc.update(**kwargs)
+            if playing:
+                rpc.update(**kwargs)
+            else:
+                from media_core.discord_payload import update_paused_activity
+                update_paused_activity(rpc, kwargs)
         else:
             raise
 
