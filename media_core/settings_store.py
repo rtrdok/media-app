@@ -45,6 +45,7 @@ _DEFAULTS = {
     "folders_by_service": True,
     "discord_rpc": True,
     "discord_client_id": "",
+    "normalize_audio": False,
 }
 
 

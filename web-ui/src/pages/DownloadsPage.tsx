@@ -1,11 +1,11 @@
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useApp } from "@/context/AppProvider"
-import { cancelJob, getClipboard, queueClear, queuePause, queueResume } from "@/lib/api"
+import { cancelJob, getClipboard, queueClear, queuePause, queueResume, queueRetry } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 export function DownloadsPage() {
-  const { state, refresh } = useApp()
+  const { state, refresh, setPage } = useApp()
   const p = state?.progress
   const queue = state?.queue ?? []
   const files = state?.files ?? []
@@ -118,7 +118,17 @@ export function DownloadsPage() {
                   </p>
                 ) : null}
                 {q.status === "error" && q.error ? (
-                  <p className="text-destructive/90 text-xs whitespace-pre-wrap break-words">{q.error}</p>
+                  <>
+                    <p className="text-destructive/90 text-xs whitespace-pre-wrap break-words">{q.error}</p>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <Button size="sm" variant="outline" onClick={() => void queueRetry(q.id).then(() => refresh(true))}>
+                        Повторить
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setPage("settings")}>
+                        Cookies и прокси
+                      </Button>
+                    </div>
+                  </>
                 ) : null}
               </div>
             ))

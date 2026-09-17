@@ -222,23 +222,6 @@ def _destroy_mini() -> None:
         log.warning("shutdown: mini destroy failed: %s", e)
 
 
-def _stop_discord_rpc_agent() -> None:
-    """Попросить elevated Discord RPC-агент завершиться (иначе exe залочен)."""
-    try:
-        import urllib.request
-
-        req = urllib.request.Request(
-            "http://127.0.0.1:17965/shutdown",
-            data=b"{}",
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=1.5):
-            pass
-    except Exception:
-        pass
-
-
 def _shutdown_app(*, from_gui: bool = False) -> None:
     """Полный выход: mini → main → queue/uvicorn → дети → hard exit."""
     global _exit_requested, _shutdown_started, _mutex_handle, _window
@@ -252,8 +235,13 @@ def _shutdown_app(*, from_gui: bool = False) -> None:
     log.info("shutdown: begin (from_gui=%s)", from_gui)
     _stop_tray()
 
+    # Keep the elevated Discord helper alive for this Windows session. It can
+    # be reused after the next Media App launch without another UAC prompt.
+    # Installers and in-app updates explicitly stop it before replacing exe.
     try:
-        _stop_discord_rpc_agent()
+        from media_core.discord_rpc import clear_presence
+
+        clear_presence()
     except Exception:
         pass
 

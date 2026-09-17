@@ -122,7 +122,6 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
                 "details": title,
                 "state": artist or ("видео" if is_video else "музыка"),
                 "name": "Media App",
-                "large_text": title,
             }
             if start_ts is not None:
                 kwargs["start"] = start_ts

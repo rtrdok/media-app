@@ -68,6 +68,9 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   const [addPlOpen, setAddPlOpen] = useState(false)
   const [queueOpen, setQueueOpen] = useState(false)
   const [lyricsOpen, setLyricsOpen] = useState(false)
+  // A finished item remains visible in the player, but must not remain
+  // "playing" in Discord after the native media element fires ended.
+  const [ended, setEnded] = useState(false)
   const hideTimer = useRef(0)
   const volumeRef = useRef(volume)
   volumeRef.current = volume
@@ -103,6 +106,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     setCurrentSec(0)
     setDurationSec(0)
     setProgress(0)
+    setEnded(false)
     void applyFullscreen(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player?.src, player?.durationLabel])
@@ -155,6 +159,11 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     if (!hasSrc) void applyFullscreen(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasSrc])
+
+  useEffect(() => {
+    // Playback can be restarted with the button/spacebar after it ended.
+    if (playing && ended) setEnded(false)
+  }, [playing, ended])
 
   useEffect(() => {
     if (!theater) return
@@ -246,7 +255,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
 
   // Мост с мини-окном + Discord Rich Presence
   useEffect(() => {
-    if (!hasSrc) {
+    if (!hasSrc || ended) {
       void publishPlayerState({ has_track: false, playing: false })
       return
     }
@@ -269,6 +278,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     return () => window.clearInterval(id)
   }, [
     hasSrc,
+    ended,
     miniPlayer,
     player?.title,
     player?.artist,
@@ -348,7 +358,10 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   }
 
   function onEnded() {
-    if (!playNextInQueue()) setPlaying(false)
+    if (!playNextInQueue()) {
+      setPlaying(false)
+      setEnded(true)
+    }
   }
 
   function onClose() {

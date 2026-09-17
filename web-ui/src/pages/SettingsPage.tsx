@@ -396,6 +396,19 @@ export function SettingsPage() {
               />
             </div>
             <div className="flex items-center justify-between gap-8">
+              <div>
+                <Label htmlFor="normalize-audio" className="mb-1 block">Выравнивать громкость MP3</Label>
+                <p className="text-muted-foreground text-xs">
+                  Новые MP3 приводятся к комфортной громкости. Загрузка займёт немного больше времени.
+                </p>
+              </div>
+              <Switch
+                id="normalize-audio"
+                checked={!!draft.normalize_audio}
+                onCheckedChange={(v) => patch({ normalize_audio: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-8">
               <Label htmlFor="tray">Сворачивать в трей при закрытии окна</Label>
               <Switch
                 id="tray"
@@ -417,8 +430,9 @@ export function SettingsPage() {
                   Discord Rich Presence
                 </Label>
                 <p className="text-muted-foreground text-xs">
-                  Трек и обложка в Discord. Cover с VK/Яндекс перезаливается на временный хост (иначе
-                  Discord показывает заглушку). Discord от администратора — UAC один раз при первом Play.
+                  Трек и обложка в Discord. Локальные обложки, VK и Яндекс временно перезаливаются,
+                  иначе Discord показывает заглушку. Если Discord от администратора, UAC нужен один
+                  раз после входа в Windows — помощник сохранится для следующих запусков приложения.
                 </p>
               </div>
               <Switch

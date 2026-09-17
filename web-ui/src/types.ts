@@ -62,6 +62,7 @@ export type AppSettings = {
   folders_by_service?: boolean
   discord_rpc?: boolean
   discord_client_id?: string
+  normalize_audio?: boolean
 }
 
 export type AppState = {

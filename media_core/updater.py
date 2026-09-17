@@ -558,6 +558,12 @@ try {{
   if (!(Test-Path -LiteralPath (Join-Path $src '{exe_name}') -PathType Leaf) -or !$hasUi) {{
     throw "Incomplete update package"
   }}
+  # The elevated Discord helper may retain MediaApp.exe between app launches.
+  # Ask it to exit before replacing the installation.
+  try {{
+    Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:17965/shutdown' -Method POST -Body '{{}}' -ContentType 'application/json' -TimeoutSec 2 | Out-Null
+    Start-Sleep -Milliseconds 600
+  }} catch {{}}
   $deadline = (Get-Date).AddSeconds(60)
   while (Get-Process -Id {os.getpid()} -ErrorAction SilentlyContinue) {{
     if ((Get-Date) -gt $deadline) {{ throw "Application did not exit; installation unchanged" }}

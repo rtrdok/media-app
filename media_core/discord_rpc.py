@@ -230,7 +230,6 @@ def _push_local(rpc, state: dict[str, Any], cid: str) -> None:
         "details": title,
         "state": artist or ("видео" if is_video else "музыка"),
         "name": "Media App",
-        "large_text": title,
     }
     if start_ts is not None:
         kwargs["start"] = start_ts
@@ -447,9 +446,19 @@ def sync_from_player(state: dict[str, Any]) -> None:
 
 
 def clear_presence() -> None:
+    # Clear the persistent elevated helper immediately when it is available.
+    # The queue still clears a normal non-elevated RPC connection.
+    if _use_agent or _agent_healthy():
+        _post_agent("/clear", {})
     _enqueue("sync", {"has_track": False, "playing": False, "title": ""})
 
 
 def on_settings_changed() -> None:
     # не сбрасываем _uac_prompted — иначе снова UAC при каждом Save
+    global _use_agent
+    if not _enabled():
+        if _agent_healthy():
+            _post_agent("/clear", {})
+            _post_agent("/shutdown", {})
+        _use_agent = False
     _enqueue("reset")

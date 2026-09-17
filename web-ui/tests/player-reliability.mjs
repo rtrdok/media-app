@@ -69,7 +69,13 @@ try {
     : { channel: "msedge", headless: true })
   const page = await browser.newPage()
   page.setDefaultTimeout(5000)
-  await page.route("**/api/**", (route) => route.fulfill({json:{ok:true,items:[],commands:[]}}))
+  const published = []
+  await page.route("**/api/**", (route) => {
+    if (route.request().url().includes("/api/player/publish")) {
+      published.push(route.request().postDataJSON())
+    }
+    return route.fulfill({json:{ok:true,items:[],commands:[]}})
+  })
   // Actual decodable media, not a mocked HTMLMediaElement.
   const wav = Buffer.alloc(44 + 16000)
   wav.write("RIFF"); wav.writeUInt32LE(wav.length - 8, 4); wav.write("WAVEfmt ", 8)
@@ -142,6 +148,12 @@ try {
     await page.waitForFunction(() => document.querySelector('video')?.readyState >= 2)
     await page.evaluate(() => {window.oldMedia=document.querySelector('video');window.setPreview(false)})
     await released()
+  })
+  await check("finished single track clears Discord Presence", async () => {
+    await open('audio')
+    await page.evaluate(() => document.querySelector('audio').dispatchEvent(new Event('ended')))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(published.at(-1)?.has_track, false)
   })
   assert.equal(failures.length, 0, `Failed: ${failures.join(', ')}`)
 } finally {

@@ -432,6 +432,7 @@ class SettingsIn(BaseModel):
     folders_by_service: bool | None = None
     discord_rpc: bool | None = None
     discord_client_id: str | None = None
+    normalize_audio: bool | None = None
 
 
 class LyricsIn(BaseModel):
@@ -812,6 +813,24 @@ async def queue_clear():
     return {"ok": True}
 
 
+@app.post("/api/queue/{job_id}/retry")
+async def queue_retry(job_id: int):
+    """Return a failed job to the queue without losing its original options."""
+    if _shutting_down:
+        raise HTTPException(409, "Приложение завершается")
+    item = next((q for q in _queue if q["id"] == job_id), None)
+    if not item:
+        raise HTTPException(404, "Задача не найдена")
+    if item.get("status") != "error":
+        raise HTTPException(409, "Повторить можно только задачу с ошибкой")
+    item.pop("error", None)
+    item.pop("progress", None)
+    item.pop("requeue_on_cancel", None)
+    item["status"] = "queued"
+    _schedule_pump()
+    return {"ok": True, "id": job_id}
+
+
 @app.post("/api/cancel")
 async def cancel():
     global _soft_pause
@@ -886,6 +905,7 @@ async def save_settings(body: SettingsIn):
         folders_by_service=body.folders_by_service,
         discord_rpc=body.discord_rpc,
         discord_client_id=body.discord_client_id,
+        normalize_audio=body.normalize_audio,
     )
     try:
         from media_core.discord_rpc import on_settings_changed
@@ -2150,6 +2170,12 @@ async def _run(
             except OSError:
                 pass
             artist, title = split_artist_title(track)
+            if get_bool("normalize_audio", False):
+                progress.update(stage="Нормализую громкость…", indeterminate=True, updated_at=time.time())
+                from media_core.audio_postprocess import normalize_mp3
+                if not await asyncio.to_thread(normalize_mp3, dest, cancel):
+                    result["message"] = "Отменено"
+                    return
             thumb = None
             try:
                 from media_core.download_ytdlp import probe_video_info
@@ -2244,6 +2270,12 @@ async def _run(
             t = meta.get("title") or title
             if t and " — " in t and not artist:
                 artist, t = split_artist_title(t)
+            if get_bool("normalize_audio", False):
+                progress.update(stage="Нормализую громкость…", indeterminate=True, updated_at=time.time())
+                from media_core.audio_postprocess import normalize_mp3
+                if not await asyncio.to_thread(normalize_mp3, dest, cancel):
+                    result["message"] = "Отменено"
+                    return
             tag_mp3(dest, title=t, artist=artist, album=album, cover_url=thumb_url)
         try:
             stem = Path(path).stem

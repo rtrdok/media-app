@@ -97,6 +97,10 @@ export function queueClear() {
   return fetch("/api/queue/clear", { method: "POST" })
 }
 
+export function queueRetry(id: number) {
+  return json<{ ok: boolean }>(`/api/queue/${id}/retry`, { method: "POST" })
+}
+
 export function openPath(path = "") {
   return fetch("/api/open", {
     method: "POST",

@@ -145,6 +145,19 @@ class QueueReliabilityTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(*s._job_tasks)
         self.assertEqual(item["status"], "queued")
 
+    async def test_retry_resets_only_a_failed_job_and_keeps_its_options(self):
+        s = self.server
+        item = self.item("retry")
+        item.update(status="error", error="temporary network error", progress={"stage": "Ошибка"})
+        with patch.object(s, "_schedule_pump") as schedule:
+            result = await s.queue_retry(item["id"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(item["status"], "queued")
+        self.assertNotIn("error", item)
+        self.assertNotIn("progress", item)
+        self.assertTrue(item["body"].url.endswith("retry"))
+        schedule.assert_called_once()
+
     async def test_scoped_metadata_and_errors_are_shared_with_worker_only(self):
         from media_core.download_state import download_scope
         from media_core import download_ytdlp as yt, download_vk_audio as vk, yandex_music_api as ym
