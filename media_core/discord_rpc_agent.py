@@ -97,7 +97,11 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
             return {"ok": True, "cleared": True}
 
         sig = "|".join(
-            [title, artist, kind, "1" if playing else "0", str(int(duration)), thumb[:96], cid]
+            [
+                title, artist, kind, "1" if playing else "0",
+                str(int(current)) if not playing else "",
+                str(int(duration)), thumb[:96], cid,
+            ]
         )
         now = time.time()
         if sig == _last_sig and (now - _last_push) < 12 and _rpc is not None:
@@ -116,6 +120,14 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
                 end_ts = int(start_ts + duration)
             is_video = kind == "video"
             cover = resolve_discord_large_image(thumb)
+            # Discord retains old timestamps when an update simply omits them.
+            # Clear first on pause (and paused seeking), then publish a static
+            # activity with no start/end so it displays the selected position.
+            if not playing:
+                try:
+                    _rpc.clear()
+                except Exception:
+                    pass
             kwargs: dict[str, Any] = {
                 "activity_type": ActivityType.WATCHING if is_video else ActivityType.LISTENING,
                 "status_display_type": StatusDisplayType.DETAILS,

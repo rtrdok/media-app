@@ -1,6 +1,8 @@
 """Discord Presence regressions that do not require Discord or the network."""
 
 import tempfile
+import sys
+import types
 import unittest
 from pathlib import Path
 from urllib.parse import quote
@@ -8,6 +10,7 @@ from unittest.mock import patch
 
 from media_core import discord_presence as presence
 from media_core import discord_rpc as rpc
+from media_core import discord_rpc_agent as agent
 
 
 class DiscordPresenceReliabilityTests(unittest.TestCase):
@@ -50,6 +53,41 @@ class DiscordPresenceReliabilityTests(unittest.TestCase):
                 patch.object(presence, "_upload_litterbox"):
             self.assertEqual(presence._rehost(b"image", "jpg"), "https://0x0.st/cover.jpg")
         fallback.assert_called_once()
+
+    def test_paused_seek_replaces_old_discord_timestamp(self):
+        class FakeRpc:
+            def __init__(self):
+                self.clears = 0
+                self.updates = []
+
+            def clear(self):
+                self.clears += 1
+
+            def update(self, **kwargs):
+                self.updates.append(kwargs)
+
+        fake = FakeRpc()
+        fake_pypresence = types.ModuleType("pypresence")
+        fake_types = types.ModuleType("pypresence.types")
+        fake_types.ActivityType = types.SimpleNamespace(WATCHING="watching", LISTENING="listening")
+        fake_types.StatusDisplayType = types.SimpleNamespace(DETAILS="details")
+        state = {
+            "client_id": "123456789012345678", "has_track": True,
+            "title": "Track", "artist": "Artist", "playing": False,
+            "current": 11, "duration": 206, "kind": "audio",
+        }
+        with patch.object(agent, "_rpc", fake), patch.object(agent, "_connected_id", state["client_id"]), \
+                patch.object(agent, "_last_sig", ""), patch.object(agent, "_last_push", 0), \
+                patch.object(agent, "_ensure", return_value=True), \
+                patch("media_core.discord_presence.resolve_discord_large_image", return_value=None), \
+                patch.dict(sys.modules, {"pypresence": fake_pypresence, "pypresence.types": fake_types}):
+            self.assertTrue(agent.apply_state(state)["ok"])
+            state["current"] = 181
+            self.assertTrue(agent.apply_state(state)["ok"])
+        self.assertEqual(fake.clears, 2)
+        self.assertEqual(len(fake.updates), 2)
+        self.assertNotIn("start", fake.updates[-1])
+        self.assertNotIn("end", fake.updates[-1])
 
 
 if __name__ == "__main__":
