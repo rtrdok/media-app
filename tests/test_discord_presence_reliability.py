@@ -87,7 +87,7 @@ class DiscordPresenceReliabilityTests(unittest.TestCase):
         self.assertEqual(fake.clears, 0)
         self.assertEqual(len(fake.updates), 2)
         payload = fake.updates[-1]["payload_override"]
-        self.assertIsNone(payload["args"]["activity"]["timestamps"])
+        self.assertEqual(payload["args"]["activity"]["timestamps"], {})
         self.assertTrue(payload["args"]["activity"]["state"].startswith("⏸ "))
 
 

@@ -8,11 +8,11 @@ from typing import Any
 
 
 def update_paused_activity(rpc, kwargs: dict[str, Any]) -> None:
-    """Publish a paused activity with ``timestamps: null`` explicitly.
+    """Publish a paused activity with an explicit empty timestamps object.
 
     Discord treats an omitted field as a partial update and keeps the previous
-    timer. The RPC schema permits nullable activity fields; pypresence strips
-    None values, so this one payload must be sent directly.
+    timer. Local Discord RPC validates timestamps as an object (not null), so
+    this one payload must be sent directly with ``timestamps: {}``.
     """
     value = lambda item: getattr(item, "value", item)
     assets: dict[str, Any] = {}
@@ -28,7 +28,7 @@ def update_paused_activity(rpc, kwargs: dict[str, Any]) -> None:
                 "details": kwargs.get("details"),
                 "state": kwargs.get("state"),
                 "name": kwargs.get("name"),
-                "timestamps": None,
+                "timestamps": {},
                 "assets": assets,
                 "instance": True,
             },
