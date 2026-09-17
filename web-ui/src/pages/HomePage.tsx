@@ -304,9 +304,9 @@ export function HomePage() {
   return (
     <div className="w-full pt-8 pr-8 pb-32 pl-8">
       <div className="mb-8">
-        <h1 className="mb-2 text-3xl font-semibold tracking-tight">Скачивайте медиа без лишнего</h1>
+        <h1 className="mb-2 text-3xl font-semibold tracking-tight">Видео и музыка — в одном приложении</h1>
         <p className="text-muted-foreground max-w-2xl text-base">
-          Вставьте одну или несколько ссылок (каждая с новой строки) — видео, плейлист или аудио.
+          Вставьте ссылку на ролик, трек или плейлист, выберите качество и формат — файл сохранится в выбранную папку и появится в библиотеке.
         </p>
       </div>
 
