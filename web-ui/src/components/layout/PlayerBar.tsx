@@ -71,6 +71,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   // A finished item remains visible in the player, but must not remain
   // "playing" in Discord after the native media element fires ended.
   const [ended, setEnded] = useState(false)
+  const [positionRevision, setPositionRevision] = useState(0)
   const hideTimer = useRef(0)
   const volumeRef = useRef(volume)
   volumeRef.current = volume
@@ -107,6 +108,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     setDurationSec(0)
     setProgress(0)
     setEnded(false)
+    setPositionRevision(0)
     void applyFullscreen(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player?.src, player?.durationLabel])
@@ -271,6 +273,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
         has_track: true,
         thumb: player?.thumb || "",
         kind: player?.kind || (player?.src && isVideoSrc(player.src) ? "video" : "audio"),
+        position_revision: positionRevision,
       })
     }
     publish()
@@ -286,6 +289,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     player?.kind,
     player?.src,
     playing,
+    positionRevision,
     volume,
     mediaRef,
   ])
@@ -345,6 +349,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     setCurrent(fmt(t))
     setCurrentSec(t)
     setTotal(fmt(el.duration))
+    setPositionRevision((v) => v + 1)
   }
 
   function seekToSec(sec: number) {
@@ -355,6 +360,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     setProgress(t / el.duration)
     setCurrent(fmt(t))
     setCurrentSec(t)
+    setPositionRevision((v) => v + 1)
   }
 
   function onEnded() {

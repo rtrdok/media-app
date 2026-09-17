@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -85,6 +86,10 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
         duration = float(data.get("duration") or 0)
     except (TypeError, ValueError):
         duration = 0.0
+    try:
+        position_revision = int(data.get("position_revision") or 0)
+    except (TypeError, ValueError):
+        position_revision = 0
 
     with _lock:
         if not has_track or not title:
@@ -99,6 +104,7 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
         sig = "|".join(
             [
                 title, artist, kind, "1" if playing else "0",
+                str(position_revision),
                 str(int(current)) if not playing else "",
                 str(int(duration)), thumb[:96], cid,
             ]
@@ -142,11 +148,19 @@ def apply_state(data: dict[str, Any]) -> dict[str, Any]:
             if cover:
                 kwargs["large_image"] = cover
             try:
-                _rpc.update(**kwargs)
+                if playing:
+                    _rpc.update(**kwargs)
+                else:
+                    from media_core.discord_payload import update_paused_activity
+                    update_paused_activity(_rpc, kwargs)
             except Exception:
                 if cover:
                     kwargs.pop("large_image", None)
-                    _rpc.update(**kwargs)
+                    if playing:
+                        _rpc.update(**kwargs)
+                    else:
+                        from media_core.discord_payload import update_paused_activity
+                        update_paused_activity(_rpc, kwargs)
                 else:
                     raise
             _last_sig = sig
@@ -173,7 +187,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         if path in ("/", "/health"):
-            self._json(200, {"ok": True, "service": "mediaapp-discord-rpc-agent"})
+            self._json(200, {"ok": True, "service": "mediaapp-discord-rpc-agent", "pid": os.getpid()})
             return
         self._json(404, {"ok": False, "error": "not found"})
 

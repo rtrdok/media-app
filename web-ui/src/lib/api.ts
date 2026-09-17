@@ -195,6 +195,7 @@ export function publishPlayerState(body: {
   has_track?: boolean
   thumb?: string
   kind?: "audio" | "video" | string
+  position_revision?: number
 }) {
   return fetch("/api/player/publish", {
     method: "POST",

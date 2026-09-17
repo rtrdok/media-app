@@ -1388,6 +1388,7 @@ class PlayerPublishIn(BaseModel):
     has_track: bool | None = None
     thumb: str | None = None
     kind: str | None = None
+    position_revision: int | None = None
 
 
 @app.post("/api/player/publish")

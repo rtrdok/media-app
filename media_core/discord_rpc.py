@@ -69,6 +69,14 @@ def _agent_healthy() -> bool:
                 raw = resp.read().decode("utf-8", errors="replace")
             data = json.loads(raw)
             if data.get("ok"):
+                try:
+                    # The agent is intentionally persistent across normal app
+                    # exits. Do not let generic child cleanup kill it, or the
+                    # next launch would ask UAC again.
+                    from media_core.process_cleanup import preserve_child_process
+                    preserve_child_process(int(data.get("pid") or 0))
+                except Exception:
+                    pass
                 return True
         except Exception:
             time.sleep(0.15)
@@ -246,11 +254,19 @@ def _push_local(rpc, state: dict[str, Any], cid: str) -> None:
     if cover:
         kwargs["large_image"] = cover
     try:
-        rpc.update(**kwargs)
+        if playing:
+            rpc.update(**kwargs)
+        else:
+            from media_core.discord_payload import update_paused_activity
+            update_paused_activity(rpc, kwargs)
     except Exception:
         if cover:
             kwargs.pop("large_image", None)
-            rpc.update(**kwargs)
+            if playing:
+                rpc.update(**kwargs)
+            else:
+                from media_core.discord_payload import update_paused_activity
+                update_paused_activity(rpc, kwargs)
         else:
             raise
 
@@ -347,6 +363,10 @@ def _worker_main() -> None:
             duration = float(state.get("duration") or 0)
         except (TypeError, ValueError):
             duration = 0.0
+        try:
+            position_revision = int(state.get("position_revision") or 0)
+        except (TypeError, ValueError):
+            position_revision = 0
 
         if not has_track or not title:
             if _use_agent:
@@ -367,6 +387,7 @@ def _worker_main() -> None:
                 artist,
                 kind,
                 "1" if playing else "0",
+                str(position_revision),
                 str(int(current)) if not playing else "",
                 str(int(duration)),
                 thumb[:96],
