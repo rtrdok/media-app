@@ -1,5 +1,6 @@
 """Installer failure checks run only against disposable install trees."""
 
+import json
 import tempfile
 import unittest
 import zipfile
@@ -15,6 +16,7 @@ def make_install(root, marker=b"old executable"):
     static = root / "_internal" / "web" / "static"
     static.mkdir(parents=True)
     (static / "index.html").write_text("test UI", encoding="utf-8")
+    (root / "_internal" / "python311.dll").write_bytes(b"test runtime")
 
 
 class InstallerReliabilityTests(unittest.TestCase):
@@ -76,6 +78,7 @@ class InstallerReliabilityTests(unittest.TestCase):
         with zipfile.ZipFile(payload, "w") as archive:
             archive.writestr("MediaApp/MediaApp.exe", b"new executable")
             archive.writestr("MediaApp/_internal/web/static/index.html", "new UI")
+            archive.writestr("MediaApp/_internal/python311.dll", b"new runtime")
         with patch.object(installer, "_payload_zip", return_value=payload), patch.object(
             installer, "_stop_running_app"
         ), patch.object(installer, "START_MENU", self.root / "menu"), patch.object(
@@ -87,6 +90,8 @@ class InstallerReliabilityTests(unittest.TestCase):
         self.assertTrue(ok, detail)
         self.assertEqual((self.target / "MediaApp.exe").read_bytes(), b"new executable")
         self.assertEqual((self.target / "history.db").read_bytes(), b"user database")
+        metadata = json.loads((self.target / installer.META_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(metadata["install_dir"], str(self.target))
 
 
 if __name__ == "__main__":

@@ -8,5 +8,5 @@ if (-not (Test-Path $py)) {
 Set-Location (Join-Path $root "web-ui")
 & npm run build
 Set-Location $root
-& $py -m PyInstaller MediaApp.spec -y
+& $py -m PyInstaller MediaApp.spec --clean -y
 Write-Host "Done: dist\MediaApp\MediaApp.exe"

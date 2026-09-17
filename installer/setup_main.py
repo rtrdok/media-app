@@ -369,6 +369,12 @@ def _replace_install_dir(src: Path, target: Path) -> None:
 def _verify_install(target: Path) -> str | None:
     if not (target / "MediaApp.exe").is_file():
         return f"Не найден MediaApp.exe в\n{target}"
+    runtime = target / "_internal"
+    if not runtime.is_dir() or not any(runtime.glob("python*.dll")):
+        return (
+            "Неполная установка (нет встроенного Python).\n"
+            "Закрой Media App полностью и запусти установщик ещё раз."
+        )
     index = target / "_internal" / "web" / "static" / "index.html"
     if not index.is_file():
         index = target / "web" / "static" / "index.html"
@@ -412,8 +418,8 @@ def _do_install(target: Path, desktop: bool, status) -> tuple[bool, str]:
         # leaves the complete previous installation untouched.
         _restore_userdata(userdata_bak, src)
         userdata_bak = None
-        _write_meta(src)
         _replace_install_dir(src, target)
+        _write_meta(target)
     except Exception as e:
         msg = str(e)
         if "WinError 5" in msg or "Отказано в доступе" in msg or "Access is denied" in msg:

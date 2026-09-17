@@ -38,7 +38,7 @@ def main() -> int:
     py = str(PY if PY.is_file() else sys.executable)
     run([py, "-m", "pip", "install", "-q", "pyinstaller"])
     if not (DIST_APP / "MediaApp.exe").is_file():
-        run([py, "-m", "PyInstaller", "--noconfirm", "MediaApp.spec"])
+        run([py, "-m", "PyInstaller", "--clean", "--noconfirm", "MediaApp.spec"])
     if ICON.is_file():
         shutil.copy2(ICON, INSTALLER_DIR / "app.ico")
     for name in ("app.png", "app-64.png"):
