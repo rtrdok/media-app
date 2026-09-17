@@ -255,12 +255,20 @@ def remove_library_item(path: str, *, delete_file: bool = True) -> dict:
     except OSError:
         pass
 
-    removed_db = library_index_remove_path(path_s)
-    if not removed_db:
-        # повтор с исходной строкой / другим слэшем
-        alt = path_s.replace("/", "\\") if "/" in path_s else path_s.replace("\\", "/")
-        if alt != path_s:
-            removed_db = library_index_remove_path(alt) or removed_db
+    # This endpoint is intentionally limited to files the application has
+    # already indexed as media.  Without this check any loopback API caller
+    # could use the library action as an arbitrary-file delete primitive.
+    indexed_paths = set()
+    for row in library_index_list():
+        candidate = str(row.get("path") or "")
+        if not candidate:
+            continue
+        try:
+            indexed_paths.add(str(Path(candidate).resolve()).lower())
+        except OSError:
+            indexed_paths.add(candidate.lower())
+    if str(p).lower() not in indexed_paths or p.suffix.lower() not in MEDIA_EXT:
+        return {"ok": False, "error": "Файл не входит в библиотеку"}
 
     deleted = False
     err = ""
@@ -274,11 +282,24 @@ def remove_library_item(path: str, *, delete_file: bool = True) -> dict:
             except OSError as e:
                 err = str(e)
                 time.sleep(0.25 * (attempt + 1))
-    elif delete_file and not p.is_file():
-        # уже нет на диске — считаем успехом, если убрали из индекса
-        deleted = False
-        if not removed_db:
-            err = "Файл не найден"
+        if err:
+            # Windows names the locking process only while the handle is live.
+            # Ask Restart Manager before returning the error to the UI.
+            try:
+                from media_core.windows_locks import describe_file_lockers
+
+                err += describe_file_lockers(p)
+            except Exception:
+                pass
+            return {"ok": False, "removed_from_index": False, "file_deleted": False, "error": err}
+
+    # A failed filesystem delete must not erase playlist membership. Only
+    # remove database records once the file is gone (or for index-only removal).
+    removed_db = library_index_remove_path(path_s)
+    if not removed_db:
+        alt = path_s.replace("/", "\\") if "/" in path_s else path_s.replace("\\", "/")
+        if alt != path_s:
+            removed_db = library_index_remove_path(alt) or removed_db
 
     ok = removed_db or deleted or (delete_file and not p.is_file())
     return {
@@ -397,9 +418,22 @@ def organize_by_artist(paths: list[str] | None = None) -> dict:
     errors = []
     for path_s in targets:
         src = Path(path_s)
+        # Only move records already present in the library index.  Besides
+        # avoiding surprising moves, this keeps the API from accepting an
+        # arbitrary source path supplied by a caller.
+        try:
+            canonical = str(src.resolve())
+        except OSError:
+            canonical = str(src)
+        meta = index.get(path_s) or index.get(canonical)
+        if meta is None:
+            errors.append({"path": path_s, "error": "Файл не входит в библиотеку"})
+            continue
         if not src.is_file():
             continue
-        meta = index.get(path_s) or _read_tags(src)
+        if src.suffix.lower() not in MEDIA_EXT:
+            errors.append({"path": path_s, "error": "Неподдерживаемый тип файла"})
+            continue
         artist = _safe_name(meta.get("artist") or "Unknown")
         dest_dir = download_dir / artist
         dest_dir.mkdir(parents=True, exist_ok=True)

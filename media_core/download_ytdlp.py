@@ -18,27 +18,38 @@ from media_core.database import get_proxies_to_try, mask_proxy, record_proxy_res
 from media_core.proxy_runner import is_fatal_proxy_error, run_with_proxies
 from media_core.logging_setup import log
 from media_core.runtime import application
+from media_core.download_state import current_download_state
 
 _last_download_error: Exception | str | None = None
 _last_extract_info: dict | None = None
 
 
 def get_last_download_error() -> Exception | str | None:
-    return _last_download_error
+    state = current_download_state()
+    return state.get("ytdlp_error") if state is not None else _last_download_error
 
 
 def get_last_extract_info() -> dict | None:
-    return _last_extract_info
+    state = current_download_state()
+    return state.get("ytdlp_info") if state is not None else _last_extract_info
 
 
 def _set_last_error(err: Exception | str | None) -> None:
     global _last_download_error
-    _last_download_error = err
+    state = current_download_state()
+    if state is not None:
+        state["ytdlp_error"] = err
+    else:
+        _last_download_error = err
 
 
 def _set_last_extract_info(info: dict | None) -> None:
     global _last_extract_info
-    _last_extract_info = info
+    state = current_download_state()
+    if state is not None:
+        state["ytdlp_info"] = info
+    else:
+        _last_extract_info = info
 
 
 def _parse_rate_limit(value: str | int | float | None) -> int | None:

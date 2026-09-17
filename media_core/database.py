@@ -16,8 +16,9 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-def init_db() -> None:
-    conn = _connect()
+def init_db(db_file: str | None = None) -> None:
+    """Initialize/migrate the active database, or an isolated backup candidate."""
+    conn = _connect() if db_file is None else sqlite3.connect(db_file)
     try:
         conn.executescript(
             """
@@ -689,6 +690,9 @@ def library_playlist_add_tracks(playlist_id: int, paths: list[str]) -> dict:
         return {"ok": False, "added": 0, "error": "Нет путей"}
     conn = _connect()
     try:
+        # Reserve the write transaction before reading MAX(position). Otherwise
+        # simultaneous requests can both append at the same playlist position.
+        conn.execute("BEGIN IMMEDIATE")
         exists = conn.execute("SELECT id FROM library_playlists WHERE id = ?", (playlist_id,)).fetchone()
         if not exists:
             return {"ok": False, "added": 0, "error": "Плейлист не найден"}

@@ -48,7 +48,7 @@ import {
   openPath,
   type LibraryPlaylist,
 } from "@/lib/api"
-import { playerTrackFromLibrary } from "@/lib/media"
+import { filePathFromPlayerSrc, playerTrackFromLibrary } from "@/lib/media"
 import { cn } from "@/lib/utils"
 
 type LibItem = {
@@ -337,13 +337,7 @@ export function LibraryPage() {
     if (!removePath) return
     setRemoveBusy(true)
     try {
-      // файл занят плеером — сначала остановить
-      const playingPath = player?.path || ""
-      const norm = (s: string) => s.replace(/\//g, "\\").toLowerCase()
-      if (playingPath && norm(playingPath) === norm(removePath)) {
-        closePlayer()
-        await new Promise((r) => window.setTimeout(r, 350))
-      }
+      await stopPlayerIfPlaying([removePath])
       const j = await libraryRemove(removePath, true)
       if (!j.ok || j.error) {
         window.alert(j.error || "Не удалось удалить файл (возможно, он открыт в другом приложении).")
@@ -381,7 +375,7 @@ export function LibraryPage() {
   }
 
   async function stopPlayerIfPlaying(paths: string[]) {
-    const playingPath = player?.path || ""
+    const playingPath = player?.path || filePathFromPlayerSrc(player?.src || "")
     const norm = (s: string) => s.replace(/\//g, "\\").toLowerCase()
     if (!playingPath) return
     if (paths.some((p) => norm(p) === norm(playingPath))) {

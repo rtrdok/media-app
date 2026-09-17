@@ -20,6 +20,7 @@ import { AddToPlaylistsModal } from "@/components/library/AddToPlaylistsModal"
 import { LyricsPanel } from "@/components/player/LyricsModal"
 import { PlayerQueuePanel } from "@/components/player/PlayerQueuePanel"
 import { useApp } from "@/context/AppProvider"
+import { useMediaRef } from "@/hooks/useMediaRef"
 import {
   applyMiniPlayerWindow,
   fetchPlayerCommands,
@@ -51,7 +52,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     miniPlayer,
     setMiniPlayer,
   } = useApp()
-  const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null)
+  const { mediaRef, attachMedia } = useMediaRef<HTMLVideoElement | HTMLAudioElement>(player?.src)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const nativeFs = useRef(false)
   const liveFallbackRef = useRef<string | null>(null)
@@ -110,7 +111,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     const el = mediaRef.current
     if (!el) return
     el.volume = volume
-  }, [volume, player?.src])
+  }, [volume, player?.src, hidden, isVideo, mediaRef])
 
   useEffect(() => {
     const el = mediaRef.current
@@ -141,14 +142,14 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     el.addEventListener("error", onError)
     el.load()
     return () => el.removeEventListener("error", onError)
-  }, [player, setPlaying, setPlayer])
+  }, [player, setPlaying, setPlayer, hidden, isVideo, mediaRef])
 
   useEffect(() => {
     const el = mediaRef.current
     if (!el || !player?.src) return
     if (playing) void el.play().catch(() => setPlaying(false))
     else el.pause()
-  }, [playing, player?.src, setPlaying])
+  }, [playing, player?.src, setPlaying, hidden, isVideo, mediaRef])
 
   useEffect(() => {
     if (!hasSrc) void applyFullscreen(false)
@@ -276,6 +277,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
     player?.src,
     playing,
     volume,
+    mediaRef,
   ])
 
   useEffect(() => {
@@ -377,7 +379,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
   const audioEl =
     !isVideo && player?.src ? (
       <audio
-        ref={mediaRef as React.RefObject<HTMLAudioElement>}
+        ref={attachMedia}
         src={player.src}
         onTimeUpdate={onTime}
         onEnded={onEnded}
@@ -644,7 +646,7 @@ export function PlayerBar({ showOnSettings = false }: { showOnSettings?: boolean
             )}
           >
             <video
-              ref={mediaRef as React.RefObject<HTMLVideoElement>}
+              ref={attachMedia}
               src={player?.src}
               className={cn(
                 "object-contain",

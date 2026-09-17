@@ -28,6 +28,7 @@ from media_core.database import (
     history_update,
 )
 from media_core.download_process import get_last_download_error, process_url, save_to_downloads
+from media_core.download_state import download_scope
 from media_core.settings_store import (
     get_all,
     get_bool,
@@ -69,6 +70,62 @@ _on_top_cb = None
 _mini_player_cb = None
 _quit_cb = None
 _uvicorn_server = None
+_active_file_streams: dict[str, int] = {}
+_active_file_tasks: dict[str, set[asyncio.Task]] = {}
+
+
+def _stream_key(path: str | Path) -> str:
+    try:
+        return str(Path(path).resolve()).lower()
+    except OSError:
+        return str(path).lower()
+
+
+class _TrackedFileResponse(FileResponse):
+    """Release an active-stream marker even when the client disconnects."""
+
+    def __init__(self, path: str | Path, **kwargs):
+        super().__init__(path, **kwargs)
+        self._stream_key = _stream_key(path)
+
+    async def __call__(self, scope, receive, send):
+        task = asyncio.current_task()
+        if task is not None:
+            _active_file_tasks.setdefault(self._stream_key, set()).add(task)
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            if task is not None:
+                tasks = _active_file_tasks.get(self._stream_key)
+                if tasks is not None:
+                    tasks.discard(task)
+                    if not tasks:
+                        _active_file_tasks.pop(self._stream_key, None)
+            left = _active_file_streams.get(self._stream_key, 0) - 1
+            if left > 0:
+                _active_file_streams[self._stream_key] = left
+            else:
+                _active_file_streams.pop(self._stream_key, None)
+
+
+def _abort_file_streams(path: str | Path) -> int:
+    """Cancel this server's responses for a file so Windows can release it."""
+    key = _stream_key(path)
+    current = asyncio.current_task()
+    tasks = tuple(_active_file_tasks.get(key, ()))
+    for task in tasks:
+        if task is not current and not task.done():
+            task.cancel()
+    return _active_file_streams.get(key, 0)
+
+
+async def _wait_for_file_streams(path: str | Path, timeout: float = 5.0) -> int:
+    """Let an aborted WebView2 media request close its FileResponse handle."""
+    key = _stream_key(path)
+    deadline = time.monotonic() + timeout
+    while _active_file_streams.get(key, 0) and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    return _active_file_streams.get(key, 0)
 
 
 def set_listen_port(port: int) -> None:
@@ -116,10 +173,6 @@ def stop_uvicorn_server() -> None:
         return
     try:
         srv.should_exit = True
-    except Exception:
-        pass
-    try:
-        srv.force_exit = True
     except Exception:
         pass
 
@@ -195,6 +248,7 @@ _queue_lock = asyncio.Lock()
 _current_job: dict | None = None
 _pump_task: asyncio.Task | None = None
 _job_tasks: set[asyncio.Task] = set()
+_SHUTDOWN_GRACE_SECONDS = 1.5
 _progress: dict = {
     "stage": "",
     "percent": "",
@@ -274,19 +328,32 @@ def _schedule_pump() -> None:
 async def lifespan(_app: FastAPI):
     global _shutting_down
     _shutting_down = False
-    yield
-    request_app_shutdown()
-    task = _pump_task
-    if task is not None and not task.done():
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
     try:
-        await asyncio.to_thread(cleanup_temp_files)
-    except Exception:
-        pass
+        yield
+    finally:
+        request_app_shutdown()
+        task = _pump_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        # Downloads run in separate tasks (and sometimes worker threads).
+        # Give cooperative cancellation time to finish before removing files.
+        pending = set()
+        jobs = set(_job_tasks)
+        if jobs:
+            _, pending = await asyncio.wait(jobs, timeout=_SHUTDOWN_GRACE_SECONDS)
+            for job in pending:
+                job.cancel()
+            await asyncio.gather(*jobs, return_exceptions=True)
+        # Cancelling to_thread does not stop its worker: leave its files alone.
+        if not pending:
+            try:
+                await asyncio.to_thread(cleanup_temp_files)
+            except Exception:
+                pass
 
 
 app = FastAPI(lifespan=lifespan)
@@ -295,8 +362,21 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 @app.middleware("http")
 async def _extension_cors(request: Request, call_next):
-    if request.method == "OPTIONS" and request.url.path.startswith("/api/"):
-        origin = request.headers.get("origin", "*")
+    """Allow CORS only for the two authenticated browser-extension actions.
+
+    The desktop UI is served from this very HTTP server and therefore does not
+    need CORS.  Reflecting arbitrary origins here would let any visited web
+    page send privileged requests to the loopback API.
+    """
+    origin = request.headers.get("origin", "")
+    path = request.url.path
+    extension_origin = origin.startswith(("chrome-extension://", "moz-extension://"))
+    extension_api = path in {
+        "/api/extension/ping",
+        "/api/cookies/from-extension",
+        "/api/extension/job",
+    }
+    if request.method == "OPTIONS" and extension_origin and extension_api:
         return Response(
             status_code=204,
             headers={
@@ -307,8 +387,7 @@ async def _extension_cors(request: Request, call_next):
             },
         )
     response = await call_next(request)
-    origin = request.headers.get("origin", "")
-    if origin.startswith("chrome-extension://") or origin.startswith("moz-extension://"):
+    if extension_origin and extension_api:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Media-Token"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
@@ -706,6 +785,7 @@ async def queue_pause():
     _soft_pause = True
     _cancel_all_running()
     for q in _running_items():
+        q["requeue_on_cancel"] = True
         prog = q.get("progress")
         if isinstance(prog, dict):
             prog["stage"] = "Пауза…"
@@ -738,6 +818,7 @@ async def cancel():
     _soft_pause = False
     _cancel_all_running()
     for q in _running_items():
+        q["requeue_on_cancel"] = False
         prog = q.get("progress")
         if isinstance(prog, dict):
             prog["stage"] = "Отмена…"
@@ -941,8 +1022,10 @@ async def apply_update(body: ApplyUpdateIn | None = None):
     from media_core.updater import start_update_job
 
     try:
-        url = body.url if body else None
-        return await asyncio.to_thread(start_update_job, url)
+        # Never accept a download URL from the browser.  It can be forged by a
+        # local process or, if CORS is misconfigured in the future, by a web
+        # page.  Resolve the expected release asset through GitHub instead.
+        return await asyncio.to_thread(start_update_job)
     except Exception as e:
         return {"ok": False, "status": "error", "message": f"Ошибка: {e}", "error": str(e)}
 
@@ -1032,7 +1115,19 @@ class LibraryRemoveIn(BaseModel):
 async def api_library_remove(body: LibraryRemoveIn):
     from media_core.library import remove_library_item
 
-    return await asyncio.to_thread(remove_library_item, body.path, delete_file=body.delete_file)
+    active = 0
+    if body.delete_file:
+        _abort_file_streams(body.path)
+        active = await _wait_for_file_streams(body.path)
+        if active:
+            return {
+                "ok": False,
+                "removed_from_index": False,
+                "file_deleted": False,
+                "error": f"Не удалось остановить выдачу файла приложением. Активных запросов: {active}.",
+            }
+    result = await asyncio.to_thread(remove_library_item, body.path, delete_file=body.delete_file)
+    return result
 
 
 @app.get("/api/library/playlists")
@@ -1847,7 +1942,9 @@ async def file_get(p: str):
             continue
     if not ok:
         raise HTTPException(404)
-    return FileResponse(resolved)
+    key = _stream_key(resolved)
+    _active_file_streams[key] = _active_file_streams.get(key, 0) + 1
+    return _TrackedFileResponse(resolved)
 
 
 @app.post("/api/anime")
@@ -1940,6 +2037,7 @@ async def _pump_queue():
                 started_at=time.time(),
             )
             nxt["cancel_event"] = cancel_ev
+            nxt["requeue_on_cancel"] = False
             nxt["progress"] = progress
             nxt["status"] = "running"
             nxt["error"] = ""
@@ -1952,34 +2050,41 @@ async def _pump_queue():
 
 async def _execute_job(nxt: dict) -> None:
     """Одна загрузка из очереди (параллельно с другими)."""
-    global _soft_pause
     progress = nxt.get("progress") or _blank_progress()
     cancel_ev = nxt.get("cancel_event") or threading.Event()
+    result = {"error": "", "message": ""}
     _last.update(error="", message="")
     try:
-        await _run(nxt["body"], progress_state=progress, cancel_event=cancel_ev)
-        if _soft_pause or (_paused and _last.get("message") == "Отменено"):
+        with download_scope():
+            await _run(nxt["body"], progress_state=progress, cancel_event=cancel_ev, result_state=result)
+        _last.update(result)
+        if nxt.get("requeue_on_cancel") and result.get("message") == "Отменено":
             nxt["status"] = "queued"
             nxt.pop("cancel_event", None)
             nxt.pop("progress", None)
             _last["message"] = "Пауза"
             _last["error"] = ""
-        elif _last.get("error"):
+        elif result.get("error"):
             nxt["status"] = "error"
-            nxt["error"] = _last["error"]
+            nxt["error"] = result["error"]
         else:
             nxt["status"] = "done"
-            if _last.get("message") in ("Готово", "Трек скачан") and get_bool("notify_on_done", True):
+            if result.get("message") in ("Готово", "Трек скачан") and get_bool("notify_on_done", True):
                 _last["notify_pending"] = True
                 try:
                     from media_core.notify_win import show_toast
                     await asyncio.to_thread(
-                        show_toast, "Media App", _last.get("message") or "Готово",
+                        show_toast, "Media App", result.get("message") or "Готово",
                     )
                 except Exception:
                     pass
+    except asyncio.CancelledError:
+        cancel_ev.set()
+        nxt["status"] = "done"
+        _last["message"] = "Отменено"
+        raise
     except Exception as e:
-        if _soft_pause:
+        if nxt.get("requeue_on_cancel") and cancel_ev.is_set():
             nxt["status"] = "queued"
             nxt.pop("cancel_event", None)
             nxt.pop("progress", None)
@@ -1989,6 +2094,7 @@ async def _execute_job(nxt: dict) -> None:
             nxt["error"] = str(e)
             _last["error"] = str(e)
     finally:
+        nxt.pop("requeue_on_cancel", None)
         if nxt.get("status") != "queued":
             nxt.pop("cancel_event", None)
             nxt.pop("progress", None)
@@ -2009,9 +2115,11 @@ async def _run(
     *,
     progress_state: dict | None = None,
     cancel_event: threading.Event | None = None,
+    result_state: dict | None = None,
 ):
     progress = progress_state if progress_state is not None else _progress
     cancel = cancel_event if cancel_event is not None else _cancel
+    result = result_state if result_state is not None else _last
     try:
         url = clean_media_url(body.url.strip())
         start, end = _clip(body.start, body.end)
@@ -2029,11 +2137,11 @@ async def _run(
                 query, audio_only=True, progress_state=progress, cancel_event=cancel,
             )
             if path is CANCELLED:
-                _last["message"] = "Отменено"
+                result["message"] = "Отменено"
                 return
             if not path or not os.path.isfile(path):
                 err = get_last_download_error()
-                _last["error"] = str(err) if err else "Не удалось скачать трек"
+                result["error"] = str(err) if err else "Не удалось скачать трек"
                 return
             dest = save_to_downloads(path, query, True, track)
             try:
@@ -2051,7 +2159,7 @@ async def _run(
             except Exception:
                 tag_mp3(dest, title=title, artist=artist)
             history_add(query, track, "youtube", format="MP3", quality="audio", dest=dest, thumb=thumb)
-            _last["message"] = "Трек скачан"
+            result["message"] = "Трек скачан"
             return
 
         if body.kind == "shazam":
@@ -2062,18 +2170,18 @@ async def _run(
                 indeterminate=True,
                 updated_at=time.time(),
             )
-            result = await recognize_music_from_url(
+            recognized = await recognize_music_from_url(
                 url, cancel_event=cancel, progress_state=progress, start=start, end=end,
             )
-            if result is CANCELLED:
-                _last["message"] = "Отменено"
-            elif not result:
-                _last["error"] = "Трек не найден"
+            if recognized is CANCELLED:
+                result["message"] = "Отменено"
+            elif not recognized:
+                result["error"] = "Трек не найден"
             else:
-                if isinstance(result, str):
-                    payload = {"track": result, "cover_url": None, "preview": ""}
+                if isinstance(recognized, str):
+                    payload = {"track": recognized, "cover_url": None, "preview": ""}
                 else:
-                    payload = dict(result)
+                    payload = dict(recognized)
                     track_name = payload.get("track") or ""
                     preview_path = payload.pop("preview_path", None)
                     preview = ""
@@ -2086,10 +2194,10 @@ async def _run(
                         "preview": preview,
                         "cover": f"/api/file?p={quote(cover_local)}" if cover_local else (cover or ""),
                     })
-                    result = track_name
-                links = build_source_links(payload.get("track") or result)
+                    recognized = track_name
+                links = build_source_links(payload.get("track") or recognized)
                 payload["links"] = [{"name": n, "url": h} for n, h in links]
-                _last["shazam"] = payload
+                result["shazam"] = payload
             return
 
         progress.update(
@@ -2105,11 +2213,11 @@ async def _run(
             container=container,
         )
         if path is CANCELLED:
-            _last["message"] = "Отменено"
+            result["message"] = "Отменено"
             return
         if not path or not os.path.isfile(path):
             err = get_last_download_error()
-            _last["error"] = str(err) if err else "Не удалось скачать"
+            result["error"] = str(err) if err else "Не удалось скачать"
             return
         progress.update(stage="Сохраняю файл…", indeterminate=True, updated_at=time.time())
         from media_core.download_ytdlp import get_last_extract_info
@@ -2155,6 +2263,6 @@ async def _run(
             dest=dest,
             thumb=thumb,
         )
-        _last["message"] = "Готово"
+        result["message"] = "Готово"
     except Exception as e:
-        _last["error"] = str(e)
+        result["error"] = str(e)

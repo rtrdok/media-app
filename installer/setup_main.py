@@ -8,7 +8,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+import uuid
 import zipfile
 from pathlib import Path
 from tkinter import filedialog
@@ -288,7 +290,7 @@ def _stop_running_app() -> None:
 
     try:
         subprocess.run(
-            ["taskkill", "/F", "/IM", "MediaApp.exe", "/T"],
+            ["taskkill", "/F", "/IM", "MediaApp.exe"],
             capture_output=True,
             text=True,
             timeout=20,
@@ -318,7 +320,7 @@ def _stop_running_app() -> None:
                     None,
                     "runas",
                     "taskkill.exe",
-                    "/F /IM MediaApp.exe /T",
+                    "/F /IM MediaApp.exe",
                     None,
                     0,
                 )
@@ -334,26 +336,30 @@ def _replace_install_dir(src: Path, target: Path) -> None:
 
     Иначе при залоченных файлах получается MediaApp\\MediaApp_install_tmp и битый _internal.
     """
+    bad = _verify_install(src)
+    if bad:
+        raise ValueError(bad)
     parent = target.parent
     parent.mkdir(parents=True, exist_ok=True)
-    old = parent / f"MediaApp_old_{os.getpid()}"
-    if old.exists():
-        shutil.rmtree(old, ignore_errors=True)
+    old = parent / f"MediaApp_old_{uuid.uuid4().hex}"
 
     if target.exists():
-        try:
-            target.rename(old)
-        except OSError:
-            shutil.rmtree(target, ignore_errors=False)
+        # A locked installation must remain intact. Deleting it after a
+        # failed rename can destroy the only working copy of the app.
+        target.rename(old)
 
     try:
         shutil.move(str(src), str(target))
+        bad = _verify_install(target)
+        if bad:
+            raise ValueError(bad)
     except Exception:
-        if old.exists() and not target.exists():
-            try:
-                old.rename(target)
-            except OSError:
-                pass
+        if target.exists():
+            # Retain the partial replacement for diagnosis, and free the
+            # original path for rollback without recursive deletion.
+            target.rename(parent / f"MediaApp_failed_{uuid.uuid4().hex}")
+        if old.exists():
+            old.rename(target)
         raise
 
     if old.exists():
@@ -379,22 +385,13 @@ def _do_install(target: Path, desktop: bool, status) -> tuple[bool, str]:
     if not zpath.is_file():
         return False, f"Не найден payload.zip:\n{zpath}"
 
-    status("Закрываю Media App…")
-    _stop_running_app()
-
     status("Распаковка…")
-    staging = target.parent / f"MediaApp_install_tmp_{os.getpid()}"
-    if staging.exists():
-        shutil.rmtree(staging, ignore_errors=True)
-    # подчистить хвосты прошлых сбоев
-    for leftover in target.parent.glob("MediaApp_install_tmp*"):
-        shutil.rmtree(leftover, ignore_errors=True)
-    for leftover in target.parent.glob("MediaApp_old_*"):
-        shutil.rmtree(leftover, ignore_errors=True)
-    staging.mkdir(parents=True, exist_ok=True)
+    staging = None
     userdata_bak = None
 
     try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix="MediaApp_install_tmp_", dir=target.parent))
         with zipfile.ZipFile(zpath, "r") as zf:
             zf.extractall(staging)
 
@@ -403,23 +400,21 @@ def _do_install(target: Path, desktop: bool, status) -> tuple[bool, str]:
         if (nested / "MediaApp.exe").is_file():
             src = nested
 
+        bad = _verify_install(src)
+        if bad:
+            return False, bad
+        status("Закрываю Media App…")
+        _stop_running_app()
         status("Копирование файлов…")
         if target.exists():
             userdata_bak = _backup_userdata(target)
-        _replace_install_dir(src, target)
-        _restore_userdata(userdata_bak, target)
+        # Prepare user data before swapping directories so a copy failure
+        # leaves the complete previous installation untouched.
+        _restore_userdata(userdata_bak, src)
         userdata_bak = None
-        _write_meta(target)
+        _write_meta(src)
+        _replace_install_dir(src, target)
     except Exception as e:
-        if userdata_bak:
-            try:
-                if target.exists():
-                    _restore_userdata(userdata_bak, target)
-                else:
-                    # откат невозможен без папки — оставим бэкап рядом
-                    pass
-            except Exception:
-                pass
         msg = str(e)
         if "WinError 5" in msg or "Отказано в доступе" in msg or "Access is denied" in msg:
             return (
@@ -431,7 +426,7 @@ def _do_install(target: Path, desktop: bool, status) -> tuple[bool, str]:
             )
         return False, f"Ошибка установки:\n{e}"
     finally:
-        if staging.exists() and staging.resolve() != target.resolve():
+        if staging is not None and staging.exists() and staging.resolve() != target.resolve():
             shutil.rmtree(staging, ignore_errors=True)
 
     bad = _verify_install(target)

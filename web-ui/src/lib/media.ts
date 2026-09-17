@@ -16,6 +16,7 @@ export function playerTrackFromHistory(it: HistoryItem): PlayerTrack {
     title: it.title,
     artist: it.platform_name || it.platform,
     src: fileUrl(it.dest),
+    path: it.dest,
     durationLabel: it.duration,
     kind: mediaKindFromPath(it.dest),
     thumb: it.thumb || undefined,

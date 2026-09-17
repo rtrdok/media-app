@@ -34,6 +34,7 @@ hiddenimports = (
         "browser_cookie3",
         "mutagen",
         "media_core.library",
+        "media_core.windows_locks",
         "media_core.backup",
         "media_core.updater",
         "media_core.lyrics",

@@ -276,11 +276,6 @@ def _shutdown_app(*, from_gui: bool = False) -> None:
         _window = None
 
     try:
-        cleanup_temp_files()
-    except Exception:
-        pass
-
-    try:
         terminate_child_processes()
     except Exception:
         pass

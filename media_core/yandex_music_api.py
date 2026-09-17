@@ -8,6 +8,7 @@ import threading
 from dataclasses import dataclass
 
 from media_core.logging_setup import log
+from media_core.download_state import current_download_state
 from media_core.utils import safe_filename
 from media_core.yandex_music_token import get_yandex_music_token
 
@@ -42,15 +43,14 @@ _last_track_meta: dict | None = None
 
 
 def get_last_yandex_track_meta() -> dict | None:
-    return dict(_last_track_meta) if _last_track_meta else None
+    state = current_download_state()
+    meta = state.get("yandex_meta") if state is not None else _last_track_meta
+    return dict(meta) if meta else None
 
 
 def _set_last_yandex_track_meta(info: YandexTrackInfo | None, url: str = "") -> None:
     global _last_track_meta
-    if not info:
-        _last_track_meta = None
-        return
-    _last_track_meta = {
+    meta = {
         "title": info.title,
         "artist": info.artist,
         "album": info.album,
@@ -59,7 +59,12 @@ def _set_last_yandex_track_meta(info: YandexTrackInfo | None, url: str = "") -> 
         "label": info.label,
         "url": url,
         "platform": "yandex_music",
-    }
+    } if info else None
+    state = current_download_state()
+    if state is not None:
+        state["yandex_meta"] = meta
+    else:
+        _last_track_meta = meta
 
 
 def parse_yandex_track_url(url: str) -> YandexTrackRef | None:

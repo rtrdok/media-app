@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from media_core.config import BASE_DIR, DOWNLOAD_DIR
 
 _PATH = BASE_DIR / "config" / "app_settings.json"
+_settings_lock = threading.RLock()
+
+
+@contextmanager
+def settings_transaction():
+    """Serialize read/modify/write operations, including backup restore."""
+    with _settings_lock:
+        yield
 
 _DEFAULTS = {
     "download_dir": DOWNLOAD_DIR,
@@ -50,7 +62,12 @@ def _load() -> dict:
 
 def _save(data: dict) -> None:
     _PATH.parent.mkdir(parents=True, exist_ok=True)
-    _PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = _PATH.with_name(f"{_PATH.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, _PATH)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def get_all() -> dict:
@@ -58,16 +75,17 @@ def get_all() -> dict:
 
 
 def update_settings(**kwargs) -> dict:
-    data = _load()
-    for k, v in kwargs.items():
-        if v is None:
-            continue
-        if k in _DEFAULTS or k == "download_dir":
-            data[k] = v
-    if data.get("download_dir"):
-        Path(str(data["download_dir"])).mkdir(parents=True, exist_ok=True)
-    _save(data)
-    return data
+    with settings_transaction():
+        data = _load()
+        for k, v in kwargs.items():
+            if v is None:
+                continue
+            if k in _DEFAULTS or k == "download_dir":
+                data[k] = v
+        if data.get("download_dir"):
+            Path(str(data["download_dir"])).mkdir(parents=True, exist_ok=True)
+        _save(data)
+        return data
 
 
 def get_download_dir() -> str:

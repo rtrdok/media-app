@@ -1,3 +1,5 @@
+import { useMediaRef } from "@/hooks/useMediaRef"
+
 /** Превью/плеер для локального файла или /api/file (видео). */
 export function InlineVideoPlayer({
   src,
@@ -8,9 +10,11 @@ export function InlineVideoPlayer({
   className?: string
   onTimeUpdate?: (current: number, duration: number) => void
 }) {
+  const { attachMedia } = useMediaRef<HTMLVideoElement>(src)
   if (!src) return null
   return (
     <video
+      ref={attachMedia}
       src={src}
       controls
       className={className}

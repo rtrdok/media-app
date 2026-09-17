@@ -7,9 +7,9 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
-import traceback
 import urllib.error
 import urllib.request
 import zipfile
@@ -290,7 +290,7 @@ def _download_via_curl(url: str, dest: Path) -> None:
     env["NO_PROXY"] = "*"
     env["no_proxy"] = "*"
     _set_job(message="Скачивание обновления…", pct=0.0, bytes_done=0, bytes_total=0)
-    log(f"Update download via curl: {curl} {url}")
+    log.info("Update download via curl: %s %s", curl, url)
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
@@ -376,8 +376,10 @@ def _write_stream_to_file(dest: Path, total: int, chunks) -> None:
                 speed_bps=round(speed, 1),
                 message=msg,
             )
+    if not done or (total and done != total):
+        raise RuntimeError(f"Неполное обновление: получено {done} байт, ожидалось {total}.")
     _set_job(
-        pct=100.0 if total else (100.0 if done else 0.0),
+        pct=100.0,
         bytes_done=done,
         bytes_total=total or done,
         message=f"Скачано {_fmt_bytes(done)}",
@@ -391,7 +393,7 @@ def _download_via_urllib(url: str, dest: Path) -> None:
     req = urllib.request.Request(url, headers=_download_headers(url))
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     _set_job(message="Скачивание обновления…", pct=0.0, bytes_done=0, bytes_total=0)
-    log(f"Update download via urllib direct: {url}")
+    log.info("Update download via urllib direct: %s", url)
     with opener.open(req, timeout=30) as r:
         total = int(r.headers.get("Content-Length") or 0)
         _set_job(bytes_total=total)
@@ -427,6 +429,8 @@ def _download_via_urllib(url: str, dest: Path) -> None:
     size = dest.stat().st_size if dest.is_file() else 0
     if size < 1024:
         raise RuntimeError("urllib: пустой файл")
+    if total and size != total:
+        raise RuntimeError(f"Неполное обновление: получено {size} байт, ожидалось {total}.")
     _set_job(pct=100.0, bytes_done=size, bytes_total=size, message=f"Скачано {_fmt_bytes(size)}")
 
 
@@ -452,7 +456,7 @@ def _download_file(url: str, dest: Path) -> None:
             return
         except Exception as e:
             last_err = e
-            log(f"Update download {label} failed: {e}")
+            log.warning("Update download %s failed: %s", label, e)
             try:
                 if dest.is_file():
                     dest.unlink()
@@ -462,7 +466,7 @@ def _download_file(url: str, dest: Path) -> None:
     # 3) requests direct with hard wall-clock budget on connect
     try:
         _set_job(message="Скачивание обновления…", pct=0.0, bytes_done=0, bytes_total=0)
-        log(f"Update download requests direct url={url}")
+        log.info("Update download requests direct url=%s", url)
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
         with ThreadPoolExecutor(max_workers=1) as pool:
@@ -483,7 +487,7 @@ def _download_file(url: str, dest: Path) -> None:
         return
     except Exception as e:
         last_err = e
-        log(f"Update download requests failed: {e}")
+        log.warning("Update download requests failed: %s", e)
         try:
             if dest.is_file():
                 dest.unlink()
@@ -496,68 +500,99 @@ def _download_file(url: str, dest: Path) -> None:
     )
 
 
+def _validate_update_zip(zip_path: Path) -> None:
+    """Reject corrupt/incomplete release packages before closing the application."""
+    with zipfile.ZipFile(zip_path) as archive:
+        names = set()
+        for item in archive.infolist():
+            name = item.filename.replace("\\", "/")
+            if (name.startswith("/") or ":" in name or ".." in name.split("/")
+                    or (item.external_attr >> 16) & 0o170000 == 0o120000):
+                raise RuntimeError(f"Недопустимый путь в ZIP: {item.filename}")
+            if not item.is_dir():
+                names.add(name.casefold())
+        valid = any(
+            prefix + "mediaapp.exe" in names
+            and any(prefix + index in names for index in (
+                "_internal/web/static/index.html", "web/static/index.html"
+            ))
+            for prefix in ("", "mediaapp/")
+        )
+        if not valid:
+            raise RuntimeError("Неполный ZIP обновления: отсутствует MediaApp.exe или web/static/index.html.")
+        bad_file = archive.testzip()
+        if bad_file:
+            raise RuntimeError(f"Повреждённый файл в ZIP: {bad_file}")
+
+
 def _write_apply_script(zip_path: Path, target: Path, exe_name: str = "MediaApp.exe") -> Path:
-    script = Path(tempfile.gettempdir()) / "mediaapp_apply_update.bat"
-    ps = Path(tempfile.gettempdir()) / "mediaapp_apply_update.ps1"
+    target = target.resolve()
+    if target == target.parent or not (target / exe_name).is_file():
+        raise RuntimeError("Папка установки не содержит MediaApp.exe; замена отменена.")
+    if Path(exe_name).name != exe_name or "'" in exe_name:
+        raise ValueError("Invalid executable name")
+    # Each job owns its script; another instance must not overwrite it.
+    ps = zip_path.parent / "apply_update.ps1"
     preserve = ", ".join(f'"{n}"' for n in sorted(_PRESERVE_NAMES))
     zip_s = str(zip_path).replace("'", "''")
     target_s = str(target).replace("'", "''")
     ps_body = f"""
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
 $zip = '{zip_s}'
 $target = '{target_s}'
 $exe = Join-Path $target '{exe_name}'
 $preserve = @({preserve})
-Start-Sleep -Seconds 2
-Get-Process MediaApp -ErrorAction SilentlyContinue | ForEach-Object {{
-  try {{ $_.CloseMainWindow() | Out-Null }} catch {{}}
-}}
-Start-Sleep -Seconds 1
-Get-Process MediaApp -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
-$staging = Join-Path $env:TEMP ("MediaApp_update_" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $staging -Force | Out-Null
-Expand-Archive -LiteralPath $zip -DestinationPath $staging -Force
-$src = $staging
-$nested = Join-Path $staging "MediaApp"
-if (Test-Path (Join-Path $nested "{exe_name}")) {{ $src = $nested }}
-$backup = Join-Path $env:TEMP ("MediaApp_userdata_" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $backup -Force | Out-Null
-foreach ($name in $preserve) {{
-  $p = Join-Path $target $name
-  if (Test-Path $p) {{
-    Copy-Item -LiteralPath $p -Destination (Join-Path $backup $name) -Recurse -Force -ErrorAction SilentlyContinue
+$parent = [System.IO.Path]::GetDirectoryName($target)
+$staging = Join-Path $parent ("MediaApp_update_" + [guid]::NewGuid().ToString("N"))
+$backup = Join-Path $parent ("MediaApp_before_update_" + [guid]::NewGuid().ToString("N"))
+$swapped = $false
+try {{
+  if (!(Test-Path -LiteralPath $exe -PathType Leaf)) {{ throw "Installation executable is missing" }}
+  New-Item -ItemType Directory -Path $staging | Out-Null
+  Expand-Archive -LiteralPath $zip -DestinationPath $staging
+  $src = $staging
+  $nested = Join-Path $staging "MediaApp"
+  if (Test-Path -LiteralPath (Join-Path $nested "{exe_name}") -PathType Leaf) {{ $src = $nested }}
+  $hasUi = (Test-Path -LiteralPath (Join-Path $src '_internal/web/static/index.html') -PathType Leaf) -or
+           (Test-Path -LiteralPath (Join-Path $src 'web/static/index.html') -PathType Leaf)
+  if (!(Test-Path -LiteralPath (Join-Path $src '{exe_name}') -PathType Leaf) -or !$hasUi) {{
+    throw "Incomplete update package"
   }}
-}}
-Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue | ForEach-Object {{
-  if ($preserve -notcontains $_.Name) {{
-    Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+  $deadline = (Get-Date).AddSeconds(60)
+  while (Get-Process -Id {os.getpid()} -ErrorAction SilentlyContinue) {{
+    if ((Get-Date) -gt $deadline) {{ throw "Application did not exit; installation unchanged" }}
+    Start-Sleep -Milliseconds 250
   }}
-}}
-Copy-Item -Path (Join-Path $src '*') -Destination $target -Recurse -Force -ErrorAction SilentlyContinue
-Get-ChildItem -LiteralPath $target -Recurse -Include *.dll,*.exe,*.pyd -ErrorAction SilentlyContinue | ForEach-Object {{
-  Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue
-  $ads = $_.FullName + ':Zone.Identifier'
-  if (Test-Path -LiteralPath $ads) {{ Remove-Item -LiteralPath $ads -Force -ErrorAction SilentlyContinue }}
-}}
-foreach ($name in $preserve) {{
-  $b = Join-Path $backup $name
-  if (Test-Path $b) {{
-    $dest = Join-Path $target $name
-    if (Test-Path $dest) {{ Remove-Item -LiteralPath $dest -Recurse -Force -ErrorAction SilentlyContinue }}
-    Copy-Item -LiteralPath $b -Destination $dest -Recurse -Force -ErrorAction SilentlyContinue
+  foreach ($name in $preserve) {{
+    $p = Join-Path $target $name
+    if (Test-Path -LiteralPath $p) {{
+      $dest = Join-Path $src $name
+      if (Test-Path -LiteralPath $dest) {{ Remove-Item -LiteralPath $dest -Recurse -Force }}
+      Copy-Item -LiteralPath $p -Destination $dest -Recurse -Force
+    }}
   }}
+  # Staging and backup are siblings on the same volume. Rename failure leaves
+  # the old installation intact; never fall back to deleting a locked target.
+  Move-Item -LiteralPath $target -Destination $backup
+  try {{
+    Move-Item -LiteralPath $src -Destination $target
+    $swapped = $true
+    Start-Process -FilePath $exe -WorkingDirectory $target -WindowStyle Hidden -ErrorAction Stop
+  }} catch {{
+    if ($swapped) {{ Move-Item -LiteralPath $target -Destination ($backup + '.failed') }}
+    if (!(Test-Path -LiteralPath $target)) {{ Move-Item -LiteralPath $backup -Destination $target }}
+    throw
+  }}
+  # Keep the previous install recoverable, including files unknown to this version.
+  "Previous installation: $backup" | Set-Content -LiteralPath (Join-Path (Split-Path $zip) 'update-result.txt')
+}} catch {{
+  $_ | Out-String | Set-Content -LiteralPath (Join-Path (Split-Path $zip) 'update-error.txt')
+  exit 1
 }}
-Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
-if (Test-Path $exe) {{ Start-Process -FilePath $exe -WorkingDirectory $target }}
 """
-    ps.write_text(ps_body.strip() + "\n", encoding="utf-8")
-    script.write_text(
-        f'@echo off\npowershell -NoProfile -ExecutionPolicy Bypass -File "{ps}"\n',
-        encoding="utf-8",
-    )
-    return script
+    # Windows PowerShell 5 needs the BOM to preserve Cyrillic installation paths.
+    ps.write_text(ps_body.strip() + "\n", encoding="utf-8-sig")
+    return ps
 
 
 def get_update_job() -> dict:
@@ -566,10 +601,13 @@ def get_update_job() -> dict:
 
 
 def _run_update_job(url: str) -> None:
-    tmp = Path(tempfile.mkdtemp(prefix="mediaapp_dl_"))
-    is_exe = url.lower().split("?", 1)[0].endswith(".exe")
-    dest = tmp / ("MediaApp-Installer.exe" if is_exe else "MediaApp.zip")
+    tmp = None
     try:
+        if not getattr(sys, "frozen", False):
+            raise RuntimeError("Автообновление доступно только в установленной сборке MediaApp.exe.")
+        tmp = Path(tempfile.mkdtemp(prefix="mediaapp_dl_"))
+        is_exe = url.lower().split("?", 1)[0].endswith(".exe")
+        dest = tmp / ("MediaApp-Installer.exe" if is_exe else "MediaApp.zip")
         with _job_lock:
             _job.update(
                 status="downloading",
@@ -581,10 +619,12 @@ def _run_update_job(url: str) -> None:
                 error="",
                 restart=False,
             )
-        log(f"Downloading update from {url}")
+        log.info("Downloading update from %s", url)
         _download_file(url, dest)
 
         if is_exe:
+            from media_core.process_cleanup import arm_hard_exit, preserve_child_process
+
             with _job_lock:
                 _job.update(status="applying", pct=100.0, message="Запуск установщика…")
             flags = 0
@@ -592,7 +632,7 @@ def _run_update_job(url: str) -> None:
                 flags |= subprocess.DETACHED_PROCESS
             if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
                 flags |= subprocess.CREATE_NEW_PROCESS_GROUP
-            subprocess.Popen(
+            process = subprocess.Popen(
                 [str(dest)],
                 cwd=str(dest.parent),
                 creationflags=flags,
@@ -601,28 +641,19 @@ def _run_update_job(url: str) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            preserve_child_process(process.pid)
             with _job_lock:
                 _job.update(
                     status="done",
                     message="Установщик запущен — заверши установку в его окне.",
                     restart=True,
                 )
-            try:
-                from media_core.process_cleanup import arm_hard_exit
-
-                arm_hard_exit(1.5)
-            except Exception:
-                threading.Timer(1.5, lambda: os._exit(0)).start()
+            arm_hard_exit(1.5)
             return
 
-        if not zipfile.is_zipfile(dest):
-            with _job_lock:
-                _job.update(
-                    status="error",
-                    message="Скачанный файл повреждён или это не ZIP.",
-                    error="not_zip",
-                )
-            return
+        _validate_update_zip(dest)
+        from media_core.process_cleanup import arm_hard_exit, preserve_child_process
+
         with _job_lock:
             _job.update(status="applying", pct=100.0, message="Установка… Перезапуск…")
         target = install_dir()
@@ -634,8 +665,8 @@ def _run_update_job(url: str) -> None:
             flags |= subprocess.DETACHED_PROCESS
         if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
             flags |= subprocess.CREATE_NEW_PROCESS_GROUP
-        subprocess.Popen(
-            ["cmd.exe", "/c", str(script)],
+        process = subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", str(script)],
             cwd=str(Path(tempfile.gettempdir())),
             creationflags=flags,
             close_fds=False,
@@ -643,14 +674,16 @@ def _run_update_job(url: str) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        preserve_child_process(process.pid)
         with _job_lock:
             _job.update(
                 status="done",
                 message="Обновление скачано. Приложение перезапустится…",
                 restart=True,
             )
+        arm_hard_exit(1.5)
     except Exception as e:
-        log(f"Update failed: {e}\n{traceback.format_exc()}")
+        log.exception("Update failed: %s", e)
         with _job_lock:
             _job.update(
                 status="error",
@@ -659,72 +692,52 @@ def _run_update_job(url: str) -> None:
                     "Открой GitHub Releases и поставь MediaApp-Installer.exe вручную."
                 ),
                 error=str(e),
+                restart=False,
             )
         try:
-            shutil.rmtree(tmp, ignore_errors=True)
+            if tmp is not None:
+                shutil.rmtree(tmp, ignore_errors=True)
         except Exception:
             pass
 
 
 def start_update_job(url: str | None = None) -> dict:
-    """Сразу отвечает клиенту; скачивание идёт в фоне."""
+    """Сразу отвечает клиенту; скачивание идёт в фоне.
+
+    ``url`` retained only for compatibility with older callers.  Update assets
+    must always be discovered from the configured GitHub release; accepting a
+    caller-supplied executable URL turns an update action into code execution.
+    """
     with _job_lock:
-        if _job["status"] in ("downloading", "applying"):
-            # залипший job без прогресса — сброс
-            if float(_job.get("bytes_done") or 0) <= 0 and float(_job.get("pct") or 0) <= 0:
-                _job.update(status="idle", message="", error="")
-            else:
-                return {
-                    "ok": True,
-                    **dict(_job),
-                    "message": _job["message"] or "Уже скачивается…",
-                }
-
-    dl = (url or "").strip()
-    info: dict = {
-        "ok": True,
-        "current": APP_VERSION,
-        "remote": "",
-        "update": bool(dl),
-        "url": dl,
-        "message": "",
-    }
-    if not dl:
-        try:
-            info = check_github_update()
-        except Exception as e:
-            return {"ok": False, "status": "error", "message": f"Ошибка проверки: {e}"}
-        dl = (info.get("url") or info.get("installer_url") or info.get("zip_url") or "").strip()
+        if _job["status"] in ("downloading", "applying") or _job.get("restart"):
+            return {"ok": True, **dict(_job)}
+        if not getattr(sys, "frozen", False):
+            message = "Автообновление доступно только в установленной сборке MediaApp.exe."
+            _job.update(status="error", message=message, error="source_checkout", restart=False)
+            return {"ok": False, **dict(_job)}
+        # Reserve before network I/O or starting the worker. Zero bytes also
+        # describes a healthy connection waiting for headers, not a dead job.
+        _job.update(status="downloading", pct=0.0, bytes_done=0, bytes_total=0,
+                    speed_bps=0.0, message="Проверка обновления…", error="", restart=False)
+    try:
+        info = check_github_update()
+        if not info.get("ok"):
+            message = info.get("message") or "Не удалось проверить обновления"
+            _set_job(status="error", message=message, error=info.get("error") or message)
+            return {**info, **get_update_job(), "ok": False}
         if not info.get("update"):
-            return {
-                **info,
-                "ok": True,
-                "status": "idle",
-                "applied": False,
-                "message": info.get("message") or "Обновление не нужно",
-            }
-    if not dl:
-        return {
-            **info,
-            "ok": False,
-            "status": "error",
-            "message": "В релизе нет Installer/ZIP. Открой страницу релизов вручную.",
-            "html_url": info.get("html_url")
-            or "https://github.com/rtrdok/media-app/releases/latest",
-        }
-
-    t = threading.Thread(target=_run_update_job, args=(dl,), daemon=True)
-    t.start()
-    return {
-        "ok": True,
-        "status": "downloading",
-        "message": "Скачивание обновления…",
-        "current": info.get("current"),
-        "remote": info.get("remote"),
-        "html_url": info.get("html_url") or "",
-        "installer_url": info.get("installer_url") or "",
-        "restart": False,
-    }
+            _set_job(status="idle", message=info.get("message") or "Обновление не нужно")
+            return {**info, **get_update_job(), "ok": True, "applied": False}
+        dl = (info.get("url") or info.get("installer_url") or info.get("zip_url") or "").strip()
+        if not dl:
+            raise RuntimeError("В релизе нет Installer/ZIP. Открой страницу релизов вручную.")
+        t = threading.Thread(target=_run_update_job, args=(dl,), daemon=True)
+        t.start()
+        snapshot = get_update_job()
+        return {**info, **snapshot, "ok": snapshot["status"] != "error"}
+    except Exception as e:
+        _set_job(status="error", message=f"Ошибка обновления: {e}", error=str(e), restart=False)
+        return {"ok": False, **get_update_job()}
 
 
 def download_and_apply_update(url: str | None = None) -> dict:

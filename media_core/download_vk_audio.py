@@ -18,6 +18,7 @@ from media_core.net_proxy import httpx_proxy
 
 from media_core.config import VK_ACCESS_TOKEN, VK_API_VERSION, load_vk_cookies
 from media_core.constants import CANCELLED
+from media_core.download_state import current_download_state
 from media_core.logging_setup import log
 from media_core.utils import parse_vk_audio_id, safe_filename, vk_audio_configured
 
@@ -41,19 +42,19 @@ _PRIVATE_PAGE_RE = re.compile(r"is_private|audio_private|private_audio", re.I)
 
 
 def get_last_download_error() -> Exception | str | None:
-    return _last_download_error
+    state = current_download_state()
+    return state.get("vk_error") if state is not None else _last_download_error
 
 
 def get_last_vk_track_meta() -> dict | None:
-    return dict(_last_vk_track_meta) if _last_vk_track_meta else None
+    state = current_download_state()
+    meta = state.get("vk_meta") if state is not None else _last_vk_track_meta
+    return dict(meta) if meta else None
 
 
 def _set_last_vk_track_meta(info: dict | None, url: str = "") -> None:
     global _last_vk_track_meta
-    if not info:
-        _last_vk_track_meta = None
-        return
-    _last_vk_track_meta = {
+    meta = {
         "title": info.get("title") or "",
         "artist": info.get("artist") or "",
         "album": info.get("album") or "",
@@ -62,12 +63,21 @@ def _set_last_vk_track_meta(info: dict | None, url: str = "") -> None:
         "label": info.get("label") or "",
         "url": url,
         "platform": "vk",
-    }
+    } if info else None
+    state = current_download_state()
+    if state is not None:
+        state["vk_meta"] = meta
+    else:
+        _last_vk_track_meta = meta
 
 
 def _set_last_error(err: Exception | str | None) -> None:
     global _last_download_error
-    _last_download_error = err
+    state = current_download_state()
+    if state is not None:
+        state["vk_error"] = err
+    else:
+        _last_download_error = err
 
 
 def _cover_from_thumb_dict(thumb: dict[str, Any] | None) -> str | None:
@@ -920,7 +930,7 @@ async def _fetch_via_al_audio(audio_id: str, *, source_url: str | None = None) -
                 if payload and _is_bad_hash_payload(payload):
                     log.warning("vk audio bad_hash for %s via %s", candidate, endpoint)
 
-        if _last_download_error is None or "bad_hash" in str(_last_download_error).lower():
+        if get_last_download_error() is None or "bad_hash" in str(get_last_download_error()).lower():
             await _mark_access_denied_if_invisible(client, cookies or "", audio_id, source_url)
     return None
 
@@ -1129,7 +1139,7 @@ async def download_vk_audio(url: str, cancel_event: threading.Event | None = Non
 
     info = await fetch_vk_audio_info(audio_id, source_url=url)
     if not info or not info.get("url"):
-        if _last_download_error is None:
+        if get_last_download_error() is None:
             _set_last_error("Не удалось получить трек. Проверь доступность записи.")
         return None
 
@@ -1138,7 +1148,7 @@ async def download_vk_audio(url: str, cancel_event: threading.Event | None = Non
     if path is None and cancel_event is not None and cancel_event.is_set():
         return CANCELLED
     if not path:
-        if _last_download_error is None:
+        if get_last_download_error() is None:
             _set_last_error("Не удалось скачать mp3")
         return None
     try:

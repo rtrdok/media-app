@@ -11,6 +11,17 @@ from media_core.logging_setup import log
 from media_core.utils import subprocess_no_window_kwargs
 
 _hard_exit_armed = False
+_preserved_child_pids: set[int] = set()
+_preserved_child_lock = threading.Lock()
+
+
+def preserve_child_process(pid: int) -> None:
+    """Keep an update installer/helper and its descendants alive on app exit."""
+    pid = int(pid)
+    if pid <= 0:
+        raise ValueError("Expected a positive child process ID")
+    with _preserved_child_lock:
+        _preserved_child_pids.add(pid)
 
 
 def terminate_child_processes() -> None:
@@ -18,9 +29,12 @@ def terminate_child_processes() -> None:
     if os.name != "nt":
         return
     pid = os.getpid()
+    with _preserved_child_lock:
+        preserved = ",".join(str(pid) for pid in sorted(_preserved_child_pids))
     # Рекурсивно: потомки текущего PID, без Stop-Process на себя
     ps = f"""
 $root = {pid}
+$preserved = @({preserved})
 $targets = New-Object 'System.Collections.Generic.HashSet[int]'
 $queue = New-Object System.Collections.Generic.Queue[int]
 $queue.Enqueue($root)
@@ -28,7 +42,7 @@ while ($queue.Count -gt 0) {{
   $p = $queue.Dequeue()
   Get-CimInstance Win32_Process -Filter "ParentProcessId=$p" -ErrorAction SilentlyContinue | ForEach-Object {{
     $cid = [int]$_.ProcessId
-    if ($cid -ne $root -and $targets.Add($cid)) {{ $queue.Enqueue($cid) }}
+    if ($cid -ne $root -and $cid -ne $PID -and $cid -notin $preserved -and $targets.Add($cid)) {{ $queue.Enqueue($cid) }}
   }}
 }}
 foreach ($cid in $targets) {{
@@ -82,7 +96,6 @@ def arm_hard_exit(delay_sec: float = 2.5, before: Callable[[], None] | None = No
             pass
         try:
             terminate_child_processes()
-            kill_known_helpers()
         except Exception:
             pass
         log.info("process_cleanup: os._exit(0)")

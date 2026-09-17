@@ -92,7 +92,7 @@ async def process_url(
         from media_core.direct_download import download_direct
 
         path = await asyncio.to_thread(
-            download_direct, url, get_download_dir_for_url(url, platform), progress_state,
+            download_direct, url, get_download_dir_for_url(url, platform), progress_state, cancel_event,
         )
     elif platform == "instagram":
         from media_core.utils import is_instagram_stories_url, youtube_cookies_active
